@@ -1,0 +1,17 @@
+{"time":"2025-03-24T13:56:07.944040589+01:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"wandb/run-20250324_135607-rys79ybg/logs/debug-core.log"}
+{"time":"2025-03-24T13:56:08.053908995+01:00","level":"INFO","msg":"created new stream","id":"rys79ybg"}
+{"time":"2025-03-24T13:56:08.053976417+01:00","level":"INFO","msg":"stream: started","id":"rys79ybg"}
+{"time":"2025-03-24T13:56:08.054036472+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:08.054053182+01:00","level":"INFO","msg":"sender: started","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:08.054079394+01:00","level":"INFO","msg":"handler: started","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:08.438277356+01:00","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-03-24T13:56:08.438449623+01:00","level":"ERROR","msg":"sender: upsertRun:","error":"failed to upsert bucket: returned error 404: {\"data\":{\"upsertBucket\":null},\"errors\":[{\"message\":\"entity your_wandb_entity not found during upsertBucket\",\"path\":[\"upsertBucket\"]}]}"}
+{"time":"2025-03-24T13:56:09.44117694+01:00","level":"INFO","msg":"stream: closing","id":"rys79ybg"}
+{"time":"2025-03-24T13:56:09.44133845+01:00","level":"ERROR","msg":"sender: upsertConfig: RunRecord is nil"}
+{"time":"2025-03-24T13:56:09.642685137+01:00","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-03-24T13:56:09.642825153+01:00","level":"ERROR","msg":"runfiles: CreateRunFiles returned error: returned error 404: {\"data\":{\"createRunFiles\":null},\"errors\":[{\"message\":\"entity your_wandb_entity not found during createRunFiles\",\"path\":[\"createRunFiles\"]}]}"}
+{"time":"2025-03-24T13:56:09.643562375+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-24T13:56:09.643641401+01:00","level":"INFO","msg":"handler: closed","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:09.643686828+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:09.643723168+01:00","level":"INFO","msg":"sender: closed","stream_id":"rys79ybg"}
+{"time":"2025-03-24T13:56:09.643817239+01:00","level":"INFO","msg":"stream: closed","id":"rys79ybg"}

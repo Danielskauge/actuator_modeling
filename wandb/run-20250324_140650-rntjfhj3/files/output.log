@@ -1,0 +1,27 @@
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+/home/daniel/miniconda3/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+
+Actuator Model Summary:
+Input dimension: 6
+Hidden dimensions: [64, 128, 256, 128, 64]
+Total parameters: 84289
+Trainable parameters: 84289
+
+  | Name  | Type | Params | Mode
+---------------------------------------
+0 | model | MLP  | 84.3 K | train
+---------------------------------------
+84.3 K    Trainable params
+0         Non-trainable params
+84.3 K    Total params
+0.337     Total estimated model params size (MB)
+15        Modules in train mode
+0         Modules in eval mode
+
+
+Epoch 56: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 7/7 [00:00<00:00, 12.26it/s, v_num=fhj3, train_loss_step=4.09e+3, val_loss=3.91e+3, train_loss_epoch=3.45e+3]
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/connectors/logger_connector/result.py:434: It is recommended to use `self.log('val_loss', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/fit_loop.py:310: The number of training batches (7) is smaller than the logging interval Trainer(log_every_n_steps=50). Set a lower value for log_every_n_steps if you want to see logs for the training epoch.
+                                                                                                                                                                                                                                                                                                              
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/connectors/logger_connector/result.py:434: It is recommended to use `self.log('train_loss', ..., sync_dist=True)` when logging on epoch level in distributed setting to accumulate the metric across devices.

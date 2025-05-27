@@ -1,0 +1,15 @@
+{"time":"2025-03-26T16:35:21.579881437+01:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"wandb/run-20250326_163521-nu5eacct/logs/debug-core.log"}
+{"time":"2025-03-26T16:35:21.690107026+01:00","level":"INFO","msg":"created new stream","id":"nu5eacct"}
+{"time":"2025-03-26T16:35:21.690156406+01:00","level":"INFO","msg":"stream: started","id":"nu5eacct"}
+{"time":"2025-03-26T16:35:21.690297736+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:21.690366625+01:00","level":"INFO","msg":"handler: started","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:21.69048004+01:00","level":"INFO","msg":"sender: started","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:22.281435489+01:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-26T16:35:26.653548446+01:00","level":"INFO","msg":"stream: closing","id":"nu5eacct"}
+{"time":"2025-03-26T16:35:26.6536098+01:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-26T16:35:26.65457555+01:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-26T16:35:27.642862966+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-26T16:35:27.875800284+01:00","level":"INFO","msg":"handler: closed","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:27.875844514+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:27.875881354+01:00","level":"INFO","msg":"sender: closed","stream_id":"nu5eacct"}
+{"time":"2025-03-26T16:35:27.875939729+01:00","level":"INFO","msg":"stream: closed","id":"nu5eacct"}

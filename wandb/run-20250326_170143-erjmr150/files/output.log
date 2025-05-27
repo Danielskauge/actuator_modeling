@@ -1,0 +1,41 @@
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/model_checkpoint.py:654: Checkpoint directory /home/daniel/workspace/actuator_modeling/models/checkpoints/None exists and is not empty.
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+/home/daniel/miniconda3/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+
+Actuator Model Summary:
+Input dimension: 20
+Hidden dimensions: [64, 128, 256, 128, 64]
+Total parameters: 85185
+Trainable parameters: 85185
+
+  | Name  | Type | Params | Mode
+---------------------------------------
+0 | model | MLP  | 85.2 K | train
+---------------------------------------
+85.2 K    Trainable params
+0         Non-trainable params
+85.2 K    Total params
+0.341     Total estimated model params size (MB)
+15        Modules in train mode
+0         Modules in eval mode
+
+
+Epoch 17: 100%|█| 563/563 [01:03<00:00,  8.88it/s, v_num=r150, train_loss_step=2.810, val_loss=2.68TorchScript model saved to models/checkpoints/../exported/model.pt
+ONNX model saved to models/checkpoints/../exported/model.onnx                                      
+[34m[1mwandb[0m: [33mWARNING[0m A graphql request initiated by the public wandb API timed out (timeout=19 sec). Create a new API with an integer timeout larger than 19, e.g., `api = wandb.Api(timeout=29)` to increase the graphql timeout.
+Epoch 17: 100%|█| 563/563 [01:03<00:00,  8.86it/s, v_num=r150, train_loss_step=2.810, val_loss=2.68
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+Testing DataLoader 0: 100%|█████████████████████████████████████| 188/188 [00:00<00:00, 198.00it/s]
+Generating test set prediction plots...
+Logging plots to WandB...
+Plots logged.
+Testing DataLoader 0: 100%|█████████████████████████████████████| 188/188 [00:01<00:00, 111.22it/s]
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃[1m [0m[1m       Test metric       [0m[1m [0m┃[1m [0m[1m      DataLoader 0       [0m[1m [0m┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│[36m [0m[36m        test_loss        [0m[36m [0m│[35m [0m[35m    2.680975914001465    [0m[35m [0m│
+│[36m [0m[36m        test_mae         [0m[36m [0m│[35m [0m[35m   1.9062581062316895    [0m[35m [0m│
+│[36m [0m[36m        test_mse         [0m[36m [0m│[35m [0m[35m    8.29942798614502     [0m[35m [0m│
+│[36m [0m[36m         test_r2         [0m[36m [0m│[35m [0m[35m   0.9799303412437439    [0m[35m [0m│
+└───────────────────────────┴───────────────────────────┘

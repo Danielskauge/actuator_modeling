@@ -1,0 +1,26 @@
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/model_checkpoint.py:654: Checkpoint directory /home/daniel/workspace/actuator_modeling/models/checkpoints/None exists and is not empty.
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+/home/daniel/miniconda3/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+
+Actuator Model Summary:
+Input dimension: 20
+Hidden dimensions: [64, 128, 256, 128, 64]
+Total parameters: 85185
+Trainable parameters: 85185
+
+  | Name  | Type | Params | Mode
+---------------------------------------
+0 | model | MLP  | 85.2 K | train
+---------------------------------------
+85.2 K    Trainable params
+0         Non-trainable params
+85.2 K    Total params
+0.341     Total estimated model params size (MB)
+15        Modules in train mode
+0         Modules in eval mode
+
+
+Epoch 0: 100%|███| 47/47 [00:01<00:00, 32.39it/s, v_num=rgin, train_loss_step=293.0, val_loss=246.0, val_mse=358.0, val_mae=17.00, val_r2=0.216]
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/fit_loop.py:310: The number of training batches (47) is smaller than the logging interval Trainer(log_every_n_steps=50). Set a lower value for log_every_n_steps if you want to see logs for the training epoch.
+                                                                                                                                                

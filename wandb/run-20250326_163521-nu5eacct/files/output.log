@@ -1,0 +1,69 @@
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/model_checkpoint.py:654: Checkpoint directory /home/daniel/workspace/actuator_modeling/models/checkpoints/None exists and is not empty.
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+/home/daniel/miniconda3/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+
+Actuator Model Summary:
+Input dimension: 20
+Hidden dimensions: [64, 128, 256, 128, 64]
+Total parameters: 85185
+Trainable parameters: 85185
+
+  | Name  | Type | Params | Mode
+---------------------------------------
+0 | model | MLP  | 85.2 K | train
+---------------------------------------
+85.2 K    Trainable params
+0         Non-trainable params
+85.2 K    Total params
+0.341     Total estimated model params size (MB)
+15        Modules in train mode
+0         Modules in eval mode
+
+
+Epoch 0: 100%|█| 94/94 [00:02<00:00, 41.30it/s, v_num=acct, train_loss_step=252.0, val_loss=215.0, val_mse=309.0, v
+                                                                                                                   
+/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/utilities/prints.py:43: UserWarning: The ``compute`` method of metric MeanSquaredError was called before the ``update`` method which may lead to errors, as metric states have not yet been updated.
+  warnings.warn(*args, **kwargs)  # noqa: B028
+/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/utilities/prints.py:43: UserWarning: The ``compute`` method of metric MeanAbsoluteError was called before the ``update`` method which may lead to errors, as metric states have not yet been updated.
+  warnings.warn(*args, **kwargs)  # noqa: B028
+/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/utilities/prints.py:43: UserWarning: The ``compute`` method of metric R2Score was called before the ``update`` method which may lead to errors, as metric states have not yet been updated.
+  warnings.warn(*args, **kwargs)  # noqa: B028
+Traceback (most recent call last):
+  File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 198, in <module>
+    train(
+  File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 148, in train
+    trainer.fit(model, datamodule=datamodule)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 539, in fit
+    call._call_and_handle_interrupt(
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 47, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 575, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 982, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1026, in _run_stage
+    self.fit_loop.run()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/fit_loop.py", line 217, in run
+    self.on_advance_end()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/fit_loop.py", line 469, in on_advance_end
+    call._call_lightning_module_hook(trainer, "on_train_epoch_end")
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 171, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/workspace/actuator_modeling/src/models/model.py", line 130, in on_train_epoch_end
+    self._log_metrics(self.train_metrics, "train")
+  File "/home/daniel/workspace/actuator_modeling/src/models/model.py", line 143, in _log_metrics
+    computed_metric = metric.compute()
+                      ^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/metric.py", line 700, in wrapped_func
+    value = _squeeze_if_scalar(compute(*args, **kwargs))
+                               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/regression/r2.py", line 143, in compute
+    return _r2_score_compute(
+           ^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/torchmetrics/functional/regression/r2.py", line 78, in _r2_score_compute
+    raise ValueError("Needs at least two samples to calculate r2 score.")
+ValueError: Needs at least two samples to calculate r2 score.

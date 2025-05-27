@@ -1,0 +1,141 @@
+_wandb:
+    value:
+        cli_version: 0.19.8
+        m:
+            - "1": lr-Adam
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": trainer/global_step
+              "6":
+                - 3
+              "7": []
+            - "1": train_loss_step
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_r2
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_mae
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_loss
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_mse
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+        python_version: 3.12.8
+        t:
+            "1":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 49
+                - 53
+                - 55
+                - 103
+            "2":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 49
+                - 53
+                - 55
+                - 103
+            "3":
+                - 7
+                - 16
+                - 23
+                - 55
+                - 66
+            "4": 3.12.8
+            "5": 0.19.8
+            "6": 4.48.3
+            "8":
+                - 5
+            "12": 0.19.8
+            "13": linux-x86_64
+activation:
+    value: relu
+batch_size:
+    value: 64
+control_frequency:
+    value: 50
+data:
+    value: ../data/actuator_data.yaml
+data_file:
+    value: data/synthetic/joint_data_20250326_163635.csv
+data_filename:
+    value: actuator_data.csv
+dropout:
+    value: 0.1
+hidden_dims:
+    value:
+        - 64
+        - 128
+        - 256
+        - 128
+        - 64
+history_length:
+    value: 5
+inertia:
+    value: 1
+input_dim:
+    value: 20
+learning_rate:
+    value: 0.001
+log_frequency:
+    value: 50
+max_epochs:
+    value: 100
+model:
+    value: ../model/mlp.yaml
+num_workers:
+    value: 4
+patience:
+    value: 10
+radius_to_accelerometer_center:
+    value: 0.033
+seed:
+    value: 42
+split_ratio:
+    value: 0.8
+test_size:
+    value: 0.2
+use_batch_norm:
+    value: true
+val_check_interval:
+    value: 1
+val_size:
+    value: 0.2
+wandb:
+    value:
+        project_name: actuator-modeling
+weight_decay:
+    value: 1e-05

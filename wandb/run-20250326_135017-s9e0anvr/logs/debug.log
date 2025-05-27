@@ -1,0 +1,24 @@
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_setup.py:_flush():67] Current SDK version is 0.19.8
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_setup.py:_flush():67] Configure stats pid to 807812
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_setup.py:_flush():67] Loading settings from /home/daniel/.config/wandb/settings
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_setup.py:_flush():67] Loading settings from /home/daniel/workspace/actuator_modeling/wandb/settings
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_setup.py:_flush():67] Loading settings from environment variables
+2025-03-26 13:50:17,968 INFO    MainThread:807812 [wandb_init.py:setup_run_log_directory():647] Logging user logs to ./wandb/run-20250326_135017-s9e0anvr/logs/debug.log
+2025-03-26 13:50:17,969 INFO    MainThread:807812 [wandb_init.py:setup_run_log_directory():648] Logging internal logs to ./wandb/run-20250326_135017-s9e0anvr/logs/debug-internal.log
+2025-03-26 13:50:17,969 INFO    MainThread:807812 [wandb_init.py:init():761] calling init triggers
+2025-03-26 13:50:17,969 INFO    MainThread:807812 [wandb_init.py:init():766] wandb.init called with sweep_config: {}
+config: {'model': '../model/mlp.yaml', 'data': '../data/actuator_data.yaml', 'batch_size': 64, 'learning_rate': 0.001, 'weight_decay': 1e-05, 'max_epochs': 100, 'patience': 10, 'num_workers': 4, 'log_frequency': 50, 'val_check_interval': 1.0, 'wandb': {'project_name': 'actuator-modeling'}, 'hidden_dims': [64, 128, 256, 128, 64], 'activation': 'relu', 'dropout': 0.1, 'use_batch_norm': True, 'use_residual': True, 'data_filename': 'actuator_data.csv', 'radius_to_accelerometer_center': 0.033, 'control_frequency': 50.0, 'inertia': 1.0, 'split_ratio': 0.8, 'seed': 42, '_wandb': {}}
+2025-03-26 13:50:17,969 INFO    MainThread:807812 [wandb_init.py:init():784] starting backend
+2025-03-26 13:50:17,969 INFO    MainThread:807812 [wandb_init.py:init():788] sending inform_init request
+2025-03-26 13:50:17,975 INFO    MainThread:807812 [backend.py:_multiprocessing_setup():101] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-03-26 13:50:17,975 INFO    MainThread:807812 [wandb_init.py:init():798] backend started and connected
+2025-03-26 13:50:17,978 INFO    MainThread:807812 [wandb_init.py:init():891] updated telemetry
+2025-03-26 13:50:17,979 INFO    MainThread:807812 [wandb_init.py:init():915] communicating run to backend with 90.0 second timeout
+2025-03-26 13:50:18,710 INFO    MainThread:807812 [wandb_init.py:init():990] starting run threads in backend
+2025-03-26 13:50:18,835 INFO    MainThread:807812 [wandb_run.py:_console_start():2375] atexit reg
+2025-03-26 13:50:18,835 INFO    MainThread:807812 [wandb_run.py:_redirect():2227] redirect: wrap_raw
+2025-03-26 13:50:18,836 INFO    MainThread:807812 [wandb_run.py:_redirect():2292] Wrapping output streams.
+2025-03-26 13:50:18,836 INFO    MainThread:807812 [wandb_run.py:_redirect():2315] Redirects installed.
+2025-03-26 13:50:18,838 INFO    MainThread:807812 [wandb_init.py:init():1032] run started, returning control to user process
+2025-03-26 13:50:18,866 INFO    MainThread:807812 [wandb_run.py:_config_callback():1261] config_cb None None {'input_dim': 4, 'hidden_dims': [64, 128, 256, 128, 64], 'learning_rate': 0.001, 'weight_decay': 1e-05, 'batch_size': 64, 'activation': 'relu', 'dropout': 0.1, 'use_batch_norm': True, 'use_residual': True, 'data_file': 'data/synthetic/joint_data_20250326_115120.csv', 'num_workers': 4, 'history_length': 5, 'inertia': 1.0, 'radius_to_accelerometer_center': 0.033, 'control_frequency': 50.0, 'test_size': 0.2, 'val_size': 0.2, 'seed': 42, 'data_filename': 'actuator_data.csv', 'split_ratio': 0.8}
+2025-03-26 13:50:20,090 INFO    MsgRouterThr:807812 [mailbox.py:close():129] Closing mailbox, abandoning 1 handles.

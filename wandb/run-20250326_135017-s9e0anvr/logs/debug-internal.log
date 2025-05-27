@@ -1,0 +1,15 @@
+{"time":"2025-03-26T13:50:17.978697053+01:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"wandb/run-20250326_135017-s9e0anvr/logs/debug-core.log"}
+{"time":"2025-03-26T13:50:18.085636802+01:00","level":"INFO","msg":"created new stream","id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:18.085691375+01:00","level":"INFO","msg":"stream: started","id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:18.085784654+01:00","level":"INFO","msg":"writer: Do: started","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:18.085812324+01:00","level":"INFO","msg":"handler: started","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:18.085877914+01:00","level":"INFO","msg":"sender: started","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:18.71262935+01:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-03-26T13:50:20.091255278+01:00","level":"INFO","msg":"stream: closing","id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:20.09130972+01:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-03-26T13:50:20.092242301+01:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-03-26T13:50:21.052978619+01:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-03-26T13:50:21.302868231+01:00","level":"INFO","msg":"handler: closed","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:21.302930421+01:00","level":"INFO","msg":"sender: closed","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:21.302925047+01:00","level":"INFO","msg":"writer: Close: closed","stream_id":"s9e0anvr"}
+{"time":"2025-03-26T13:50:21.303074254+01:00","level":"INFO","msg":"stream: closed","id":"s9e0anvr"}

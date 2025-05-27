@@ -1,0 +1,99 @@
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1]
+/home/daniel/miniconda3/lib/python3.12/site-packages/torch/optim/lr_scheduler.py:62: UserWarning: The verbose parameter is deprecated. Please use get_last_lr() to access the learning rate.
+  warnings.warn(
+
+Actuator Model Summary:
+Input dimension: 6
+Hidden dimensions: [64, 128, 256, 128, 64]
+Total parameters: 84289
+Trainable parameters: 84289
+
+  | Name  | Type | Params | Mode
+---------------------------------------
+0 | model | MLP  | 84.3 K | train
+---------------------------------------
+84.3 K    Trainable params
+0         Non-trainable params
+84.3 K    Total params
+0.337     Total estimated model params size (MB)
+15        Modules in train mode
+0         Modules in eval mode
+
+
+Sanity Checking DataLoader 0: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 1/1 [00:00<00:00,  2.34it/s]
+Traceback (most recent call last):
+  File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 195, in <module>
+    train(
+  File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 151, in train
+    trainer.fit(model, datamodule=datamodule)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 539, in fit
+    call._call_and_handle_interrupt(
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 46, in _call_and_handle_interrupt
+    return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/strategies/launchers/subprocess_script.py", line 105, in launch
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 575, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 982, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1024, in _run_stage
+    self._run_sanity_check()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1053, in _run_sanity_check
+    val_loop.run()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/utilities.py", line 179, in _decorator
+    return loop_run(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 151, in run
+    return self.on_run_end()
+           ^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 291, in on_run_end
+    self._on_evaluation_epoch_end()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 370, in _on_evaluation_epoch_end
+    call._call_callback_hooks(trainer, hook_name)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 222, in _call_callback_hooks
+    fn(trainer, trainer.lightning_module, *args, **kwargs)
+  File "/home/daniel/workspace/actuator_modeling/src/utils/callbacks.py", line 95, in on_validation_epoch_end
+    trainer.logger.experiment.add_figure(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Run' object has no attribute 'add_figure'
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 195, in <module>
+[rank0]:     train(
+[rank0]:   File "/home/daniel/workspace/actuator_modeling/scripts/train.py", line 151, in train
+[rank0]:     trainer.fit(model, datamodule=datamodule)
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 539, in fit
+[rank0]:     call._call_and_handle_interrupt(
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 46, in _call_and_handle_interrupt
+[rank0]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank0]:     return function(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 575, in _fit_impl
+[rank0]:     self._run(model, ckpt_path=ckpt_path)
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 982, in _run
+[rank0]:     results = self._run_stage()
+[rank0]:               ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1024, in _run_stage
+[rank0]:     self._run_sanity_check()
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1053, in _run_sanity_check
+[rank0]:     val_loop.run()
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/utilities.py", line 179, in _decorator
+[rank0]:     return loop_run(self, *args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 151, in run
+[rank0]:     return self.on_run_end()
+[rank0]:            ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 291, in on_run_end
+[rank0]:     self._on_evaluation_epoch_end()
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 370, in _on_evaluation_epoch_end
+[rank0]:     call._call_callback_hooks(trainer, hook_name)
+[rank0]:   File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 222, in _call_callback_hooks
+[rank0]:     fn(trainer, trainer.lightning_module, *args, **kwargs)
+[rank0]:   File "/home/daniel/workspace/actuator_modeling/src/utils/callbacks.py", line 95, in on_validation_epoch_end
+[rank0]:     trainer.logger.experiment.add_figure(
+[rank0]:     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: AttributeError: 'Run' object has no attribute 'add_figure'

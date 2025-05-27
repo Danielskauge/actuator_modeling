@@ -1,0 +1,27 @@
+# Default Training Configuration
+
+# Include model and data configs
+model: "../model/mlp.yaml"
+data: "../data/actuator_data.yaml"
+
+# Training parameters
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.00001
+max_epochs: 5
+
+# Early stopping
+patience: 10
+
+# Number of workers for data loading
+num_workers: 4
+
+# How often to log (in steps)
+log_frequency: 50
+
+# How often to validate (in epochs)
+val_check_interval: 1.0
+
+# Wandb Configuration
+wandb:
+  project_name: "actuator-modeling"  # Replace with your desired project name
