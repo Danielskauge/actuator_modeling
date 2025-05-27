@@ -1,0 +1,5 @@
+# This file helps Hydra select the MLP model type.
+# Specific MLP parameters (like mlp_hidden_dims, mlp_activation, etc.)
+# are defined in configs/model/default.yaml and will be used when model.model_type is 'mlp'.
+
+name: mlp 

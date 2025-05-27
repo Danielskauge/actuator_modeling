@@ -1,0 +1,51 @@
+\
+debug: false
+seed: 42 # Global random seed
+
+defaults:
+  - _self_ # Inherit from this file itself
+  - data: default
+  - model: default # This will load configs/model/default.yaml (which itself defaults to GRU type)
+  - train: default
+  # - override hydra/job_logging: colorlog # Already in model/default.yaml, but can be here too
+  # - override hydra/hydra_logging: colorlog
+
+# Workspace and output directory structure
+# these paths are relative to the output directory that Hydra creates for each run
+# (e.g. outputs/YYYY-MM-DD/HH-MM-SS/)
+work_dir: ${hydra:runtime.cwd} # The original CWD; for accessing source data, etc.
+outputs_dir: ${hydra:runtime.output_dir} # The directory Hydra creates for this run
+
+# --- Experiment Tracking (Example: WandB) ---
+wandb:
+  # active: true # set to false to disable wandb
+  project: "actuator_modeling_gru" # Your WandB project name
+  entity: "" # Your WandB entity (username or team), optional
+  # name: "${model.model_type}-${now:%Y-%m-%d_%H-%M-%S}" # Run name, can be customized
+  # tags: ["${model.model_type}", "lomo_cv"]
+  # log_model: "all" # 'all', 'best', or false
+
+# --- LOMO CV specific ---
+# The number of folds will be determined by the length of data.dataset_configs in the training script.
+# The script will loop from fold_idx = 0 to num_folds - 1.
+
+# --- For `scripts/generate_synthetic_csv.py` (if we make it Hydra-configurable) ---
+# synthetic_data_generation:
+#   output_dir: "${work_dir}/data/synthetic/"
+#   num_files: 3
+#   num_rows_per_file: 1000
+#   fs: 100 # Hz
+#   # PD controller params for generation
+#   kp_gen: 5.0
+#   kd_gen: 0.1
+#   inertia_gen_base: 0.01 # Will be varied per file
+#   # Trajectory params
+#   amp_target: 0.785 # pi/4 radians
+#   freq_target_base: 0.5 # Hz, will be varied
+#   # Spring params for generated data
+#   k_spring_gen: 0.0
+#   theta0_gen: 0.0
+#   # Noise
+#   noise_torque_std: 0.05
+#   # Accelerometer specific for generation
+#   radius_gen: 0.05 # meters, for generating Acc_X data 

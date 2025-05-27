@@ -1,0 +1,52 @@
+\
+defaults:
+  - model_type: gru # Can be mlp or gru. This will load configs/model/model_type/${model_type}.yaml
+  - override hydra/job_logging: colorlog # stdout/stderr logging
+  - override hydra/hydra_logging: colorlog
+
+# Parameters for ActuatorModel constructor
+# These are common across MLP and GRU or define the residual/physics part.
+
+# Model selection will be based on model_type.
+# Specific parameters for mlp or gru will be in their respective files (e.g., mlp.yaml, gru.yaml)
+# and merged under a key, e.g., model_type_params.
+
+_target_: src.models.model.ActuatorModel
+# input_dim will be set by the DataModule based on features_to_use
+
+learning_rate: 1e-3
+weight_decay: 1e-6
+warmup_epochs: 1 # For cosine scheduler with linear warmup
+
+# --- Residual Learning Configuration ---
+use_residual: false # If True, model predicts tau_measured - tau_phys
+
+# --- Physics Parameters for tau_phys calculation (used if use_residual: true) ---
+# tau_phys(k) = k_spring*(theta(k) - theta0) + kp_phys*(error(k)) + kd_phys*(error_dot(k))
+# These are also used by the dataset if tau_cmd(k-1) feature requires calculating tau_phys(k-1).
+k_spring: 0.0   # Spring constant (Nm/rad)
+theta0: 0.0     # Spring equilibrium angle (radians)
+kp_phys: 0.0    # PD Kp for physical model (Nm/rad)
+kd_phys: 0.0    # PD Kd for physical model (Nm*s/rad)
+
+# --- Loss Configuration ---
+loss_diff_weight: 0.1 # Weight for the first-difference of torque predictions in the loss
+
+# Note: model_type specific params (like mlp_hidden_dims or gru_hidden_dim)
+# will be loaded from configs/model/model_type/${model.model_type}.yaml
+# and should be passed to ActuatorModel constructor by the training script.
+# The ActuatorModel __init__ needs to be adapted to accept a sub-dict for these.
+# For now, ActuatorModel takes them as direct args. We will pass them flatly from merged config.
+
+model_type: ${model.model_type.name} # 'mlp' or 'gru'
+
+# MLP specific (will be used if model_type is mlp)
+mlp_hidden_dims: [64, 128, 64]
+mlp_activation: "relu"
+mlp_dropout: 0.1
+mlp_use_batch_norm: true
+
+# GRU specific (will be used if model_type is gru)
+gru_hidden_dim: 128
+gru_num_layers: 2
+gru_dropout: 0.1 # Dropout for GRU layers (between layers if num_layers > 1) 

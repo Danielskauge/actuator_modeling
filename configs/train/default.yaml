@@ -8,10 +8,10 @@ data: "../data/actuator_data.yaml"
 batch_size: 64
 learning_rate: 0.001
 weight_decay: 0.00001
-max_epochs: 5
+max_epochs: 200
 
 # Early stopping
-patience: 10
+patience: 20
 
 # Number of workers for data loading
 num_workers: 4
@@ -25,3 +25,46 @@ val_check_interval: 1.0
 # Wandb Configuration
 wandb:
   project_name: "actuator-modeling"  # Replace with your desired project name
+
+# --- General Training Parameters ---
+# gradient_clip_val: 5.0 # As requested: Gradient clip ||g||2 <= 5
+# gradient_clip_algorithm: "norm"
+# These are now set in the training script directly on the Trainer object
+# or can be uncommented here if preferred for full Hydra config.
+
+accelerator: "auto" # auto will pick GPU if available, else CPU
+devices: "auto"
+precision: "32-true" # or 16-mixed for mixed precision
+
+# --- Logging --- 
+# logger: true # default an wandb is used if installed and configured in script
+# enable_checkpointing: true # default
+# callbacks: null # will be configured in script (EarlyStopping, ModelCheckpoint)
+
+# --- Early Stopping Configuration (will be instantiated in the training script) ---
+# The EarlyStopping callback will be configured to monitor 'val_rmse_torque' (needs to be logged by model)
+# with min_delta = 0.0 (effectively, stop if val_rmse_torque <= 0.05 OR no improvement for patience epochs)
+# and patience = 20 epochs.
+# The stopping_threshold logic (<= 0.05 Nm) will be part of the callback setup.
+
+early_stopping:
+  monitor: "val_rmse_epoch" # Changed from val_loss. ActuatorModel now logs val_rmse_epoch.
+  mode: "min"
+  patience: 20      # Number of epochs with no improvement after which training will be stopped.
+  min_delta: 0.0001 # Minimum change to qualify as improvement (small for RMSE).
+  verbose: True
+  # stopping_threshold: 0.05 # This target (val_rmse_epoch <= 0.05) will be handled by custom logic
+                           # in the EarlyStopping callback in the training script.
+
+# --- Checkpointing --- (can be further customized in the script)
+checkpointing:
+  monitor: "val_rmse_epoch" # Monitor RMSE for saving best model.
+  mode: "min"
+  save_top_k: 1
+  filename: "best_model-{epoch:02d}-{val_rmse_epoch:.4f}"
+
+# --- LOMO Cross-Validation Parameters (used by the training script) ---
+# num_folds will be determined by the number of datasets in data.dataset_configs
+
+# --- Reproducibility ---
+# seed: 42 # Set in the main training script via pl.seed_everything()

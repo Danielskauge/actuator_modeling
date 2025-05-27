@@ -1,0 +1,5 @@
+# This file helps Hydra select the GRU model type.
+# Specific GRU parameters (like gru_hidden_dim, gru_num_layers, gru_dropout)
+# are defined in configs/model/default.yaml and will be used when model.model_type is 'gru'.
+
+name: gru 

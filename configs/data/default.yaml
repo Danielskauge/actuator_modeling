@@ -1,0 +1,34 @@
+\
+_target_: src.data.datamodule.ActuatorDataModule
+
+# List of configurations for each dataset (mass). Each item is a dict.
+# The training script for LOMO CV will iterate through these, using one for validation/test
+# and the rest for training in each fold.
+dataset_configs:
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_0.csv", inertia: 0.01} # Example from synthetic gen
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_1.csv", inertia: 0.015}
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_2.csv", inertia: 0.02}
+  # !!! Populate this list with your actual 15 CSV file paths and their inertias !!!
+  # e.g.:
+  # - {csv_file_path: "actual_data/trial1_massA.csv", inertia: 0.0123}
+  # - {csv_file_path: "actual_data/trial2_massB.csv", inertia: 0.0234}
+
+# `features_to_use` is no longer needed here as ActuatorDataset defines its 5 features internally.
+# The input_dim for the model is fixed at 5 by ActuatorDataset.
+
+target_name: 'tau_measured'
+gyro_axis_for_ang_vel: 'Gyro_Z' # 'Gyro_X', 'Gyro_Y', 'Gyro_Z', or null (not recommended)
+accel_axis_for_torque: 'Acc_Y'  # Tangential accelerometer axis used by ActuatorDataset
+
+# --- DataModule Parameters ---
+batch_size: 32
+num_workers: 4 # Set to 0 for debugging
+
+# --- Physical Parameters for ActuatorDataset are REMOVED from here ---
+# k_spring_val, theta0_val, kp_phys_val, kd_phys_val are no longer needed by ActuatorDataModule or ActuatorDataset.
+# The ActuatorModel itself will use these from its own config (configs/model/default.yaml) if use_residual=True.
+
+# --- System Geometry (passed to ActuatorDataset) ---
+radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.
+radius_load: 0.3  # meters. Approx. radius of variable mass load (for record-keeping/future use).
+                  # This is an example, update if needed, or remove if not used by ActuatorDataset directly. 
