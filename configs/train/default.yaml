@@ -33,7 +33,7 @@ wandb:
 # or can be uncommented here if preferred for full Hydra config.
 
 accelerator: "auto" # auto will pick GPU if available, else CPU
-devices: "auto"
+devices: 1
 precision: "32-true" # or 16-mixed for mixed precision
 
 # --- Logging --- 

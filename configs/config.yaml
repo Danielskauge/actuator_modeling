@@ -1,4 +1,3 @@
-\
 debug: false
 seed: 42 # Global random seed
 
@@ -9,8 +8,6 @@ defaults:
   - data: default
   - model: default # This will load configs/model/default.yaml (which itself defaults to GRU type)
   - train: default
-  # - override hydra/job_logging: colorlog # Already in model/default.yaml, but can be here too
-  # - override hydra/hydra_logging: colorlog
 
 # Workspace and output directory structure
 # these paths are relative to the output directory that Hydra creates for each run

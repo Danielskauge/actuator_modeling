@@ -1,0 +1,115 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+Starting global training...
+You are using a CUDA device ('NVIDIA GeForce RTX 3090') that has Tensor Cores. To properly utilize them, you should set `torch.set_float32_matmul_precision('medium' | 'high')` which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Warning: Total training steps (inf) <= warmup steps (inf). Cosine decay might not behave as expected. Effective LR may be constant or only warmup.
+
+  | Name          | Type       | Params | Mode
+-----------------------------------------------------
+0 | model         | GRUModel   | 150 K  | train
+1 | train_metrics | ModuleDict | 0      | train
+2 | val_metrics   | ModuleDict | 0      | train
+3 | test_metrics  | ModuleDict | 0      | train
+-----------------------------------------------------
+150 K     Trainable params
+0         Non-trainable params
+150 K     Total params
+0.601     Total estimated model params size (MB)
+18        Modules in train mode
+0         Modules in eval mode
+Epoch 110: 100%|█| 132/132 [00:01<00:00, 72.63it/s, v_num=lkbw, train_loss_step=0.00567, val_loss=0.00403, v
+Starting global testing...                                                                                  
+Metric val_rmse_epoch improved. New best score: 0.092
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/lr_monitor.py:217: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.091
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.091
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.089
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.088
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.086
+Metric val_rmse_epoch improved by 0.005 >= min_delta = 0.0001. New best score: 0.081
+Metric val_rmse_epoch improved by 0.006 >= min_delta = 0.0001. New best score: 0.075
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.072
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.070
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.069
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.069
+Metric val_rmse_epoch improved by 0.008 >= min_delta = 0.0001. New best score: 0.061
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.061
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.060
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.059
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.058
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.058
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.058
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.057
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.056
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.056
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.056
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.055
+Monitored metric val_rmse_epoch did not improve in the last 20 records. Best score: 0.055. Signaling Trainer to stop.
+Restoring states from the checkpoint path at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/14-44-57/checkpoints/global_run/gru-global_debug-epoch=90-val_rmse_epoch=0.0549.ckpt
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Loaded model weights from the checkpoint at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/14-44-57/checkpoints/global_run/gru-global_debug-epoch=90-val_rmse_epoch=0.0549.ckpt
+Testing DataLoader 0: 100%|████████████████████████████████████████████████| 29/29 [00:00<00:00, 283.45it/s]
+Generating test set prediction plots...
+Error executing job with overrides: ['evaluation_mode=global']
+Traceback (most recent call last):
+  File "/home/daniel/workspace/actuator_modeling/scripts/train_model.py", line 147, in train_actuator_model
+    global_test_results = trainer_global.test(model_global, datamodule=datamodule, ckpt_path='best')
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 749, in test
+    return call._call_and_handle_interrupt(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 47, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 789, in _test_impl
+    results = self._run(model, ckpt_path=ckpt_path)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 982, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/trainer.py", line 1019, in _run_stage
+    return self._evaluation_loop.run()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/utilities.py", line 179, in _decorator
+    return loop_run(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 151, in run
+    return self.on_run_end()
+           ^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 305, in on_run_end
+    self._on_evaluation_end()
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/loops/evaluation_loop.py", line 350, in _on_evaluation_end
+    call._call_callback_hooks(trainer, hook_name, *args, **kwargs)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/trainer/call.py", line 222, in _call_callback_hooks
+    fn(trainer, trainer.lightning_module, *args, **kwargs)
+  File "/home/daniel/workspace/actuator_modeling/src/utils/callbacks.py", line 136, in on_test_end
+    ax_scatter.scatter(targets, preds, alpha=0.5, label='Predictions')
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/_api/deprecation.py", line 453, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/__init__.py", line 1521, in inner
+    return func(
+           ^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/axes/_axes.py", line 4894, in scatter
+    x, y = self._process_unit_info([("x", x), ("y", y)], kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/axes/_base.py", line 2617, in _process_unit_info
+    axis.update_units(data)
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/axis.py", line 1756, in update_units
+    converter = munits.registry.get_converter(data)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/units.py", line 167, in get_converter
+    x = cbook._unpack_to_numpy(x)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/matplotlib/cbook.py", line 2361, in _unpack_to_numpy
+    xtmp = np.asarray(x)
+           ^^^^^^^^^^^^^
+  File "/home/daniel/miniconda3/lib/python3.12/site-packages/torch/_tensor.py", line 1149, in __array__
+    return self.numpy()
+           ^^^^^^^^^^^^
+TypeError: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to host memory first.
+
+Set the environment variable HYDRA_FULL_ERROR=1 for a complete stack trace.

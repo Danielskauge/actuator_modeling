@@ -1,0 +1,7 @@
+{"time":"2025-05-28T14:44:25.406177221+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/home/daniel/workspace/actuator_modeling/outputs/2025-05-28/14-44-24/wandb/run-20250528_144425-5m4jdhol/logs/debug-core.log"}
+{"time":"2025-05-28T14:44:25.5182858+02:00","level":"INFO","msg":"created new stream","id":"5m4jdhol"}
+{"time":"2025-05-28T14:44:25.518343683+02:00","level":"INFO","msg":"stream: started","id":"5m4jdhol"}
+{"time":"2025-05-28T14:44:25.518373668+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"5m4jdhol"}
+{"time":"2025-05-28T14:44:25.518393407+02:00","level":"INFO","msg":"handler: started","stream_id":"5m4jdhol"}
+{"time":"2025-05-28T14:44:25.518427817+02:00","level":"INFO","msg":"sender: started","stream_id":"5m4jdhol"}
+{"time":"2025-05-28T14:44:26.049762499+02:00","level":"INFO","msg":"Starting system monitor"}

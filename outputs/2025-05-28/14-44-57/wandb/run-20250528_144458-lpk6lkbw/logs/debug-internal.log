@@ -1,0 +1,15 @@
+{"time":"2025-05-28T14:44:58.228957822+02:00","level":"INFO","msg":"stream: starting","core version":"0.19.8","symlink path":"/home/daniel/workspace/actuator_modeling/outputs/2025-05-28/14-44-57/wandb/run-20250528_144458-lpk6lkbw/logs/debug-core.log"}
+{"time":"2025-05-28T14:44:58.337791976+02:00","level":"INFO","msg":"created new stream","id":"lpk6lkbw"}
+{"time":"2025-05-28T14:44:58.337838464+02:00","level":"INFO","msg":"stream: started","id":"lpk6lkbw"}
+{"time":"2025-05-28T14:44:58.337885696+02:00","level":"INFO","msg":"writer: Do: started","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:44:58.337903095+02:00","level":"INFO","msg":"handler: started","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:44:58.337980342+02:00","level":"INFO","msg":"sender: started","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:44:58.979455914+02:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-05-28T14:48:22.120216675+02:00","level":"INFO","msg":"stream: closing","id":"lpk6lkbw"}
+{"time":"2025-05-28T14:48:22.120265331+02:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-05-28T14:48:22.120988807+02:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-05-28T14:48:22.841267176+02:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-05-28T14:48:23.599567476+02:00","level":"INFO","msg":"handler: closed","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:48:23.599637749+02:00","level":"INFO","msg":"sender: closed","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:48:23.599636258+02:00","level":"INFO","msg":"writer: Close: closed","stream_id":"lpk6lkbw"}
+{"time":"2025-05-28T14:48:23.599769243+02:00","level":"INFO","msg":"stream: closed","id":"lpk6lkbw"}

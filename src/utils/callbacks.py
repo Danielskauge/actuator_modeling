@@ -123,17 +123,43 @@ class TestPredictionPlotter(Callback):
             print("Aggregated test predictions/targets not found in the model. Skipping plots.")
             return
 
-        preds = pl_module.all_test_preds
-        targets = pl_module.all_test_targets
+        preds_tensor = pl_module.all_test_preds
+        targets_tensor = pl_module.all_test_targets
 
-        # Ensure we have data
-        if preds is None or targets is None or len(preds) == 0:
-            print("No test predictions or targets available to plot.")
+        # Ensure we have data and process tensors
+        if preds_tensor is None or targets_tensor is None:
+            print("No test predictions or targets available to plot (initial check).")
+            return
+
+        # Assuming all_test_preds and all_test_targets are lists of tensors from test_step outputs
+        # Concatenate them if they are lists of tensors
+        if isinstance(preds_tensor, list) and all(isinstance(t, torch.Tensor) for t in preds_tensor):
+            preds_tensor = torch.cat(preds_tensor)
+        elif not isinstance(preds_tensor, torch.Tensor):
+            print(f"Predictions are not a tensor or list of tensors, type: {type(preds_tensor)}. Skipping plots.")
+            return
+            
+        if isinstance(targets_tensor, list) and all(isinstance(t, torch.Tensor) for t in targets_tensor):
+            targets_tensor = torch.cat(targets_tensor)
+        elif not isinstance(targets_tensor, torch.Tensor):
+            print(f"Targets are not a tensor or list of tensors, type: {type(targets_tensor)}. Skipping plots.")
+            return
+
+        if preds_tensor.numel() == 0 or targets_tensor.numel() == 0:
+            print("No test predictions or targets available to plot after processing (empty tensors).")
+            return
+            
+        # Move to CPU and convert to NumPy
+        try:
+            preds_np = preds_tensor.cpu().numpy()
+            targets_np = targets_tensor.cpu().numpy()
+        except Exception as e:
+            print(f"Error converting tensors to NumPy: {e}. Skipping plots.")
             return
 
         # --- 1. Scatter Plot ---
         fig_scatter, ax_scatter = plt.subplots(figsize=(8, 8))
-        ax_scatter.scatter(targets, preds, alpha=0.5, label='Predictions')
+        ax_scatter.scatter(targets_np, preds_np, alpha=0.5, label='Predictions')
         lims = [
             np.min([ax_scatter.get_xlim(), ax_scatter.get_ylim()]),
             np.max([ax_scatter.get_xlim(), ax_scatter.get_ylim()]),
@@ -148,9 +174,9 @@ class TestPredictionPlotter(Callback):
 
         # --- 2. Time Series Plot ---
         fig_ts, ax_ts = plt.subplots(figsize=(15, 5))
-        sample_indices = np.arange(len(targets))
-        ax_ts.plot(sample_indices, targets, label='Actual Torque', linewidth=1.5)
-        ax_ts.plot(sample_indices, preds, label='Predicted Torque', alpha=0.8, linewidth=1.5)
+        sample_indices = np.arange(len(targets_np))
+        ax_ts.plot(sample_indices, targets_np, label='Actual Torque', linewidth=1.5)
+        ax_ts.plot(sample_indices, preds_np, label='Predicted Torque', alpha=0.8, linewidth=1.5)
         ax_ts.set_xlabel("Sample Index")
         ax_ts.set_ylabel("Torque")
         ax_ts.set_title("Test Set: Torque Prediction Over Time/Index")

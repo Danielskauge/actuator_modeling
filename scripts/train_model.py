@@ -19,27 +19,28 @@ class CustomEarlyStopping(EarlyStopping):
     def __init__(self, stopping_threshold: float = None, monitor_op=None, **kwargs):
         super().__init__(**kwargs)
         self.stopping_threshold = stopping_threshold
-        # If monitor_op is not provided, deduce from mode
+        # Store the custom monitor_op logic in a separate attribute
         if monitor_op is None:
             if self.mode == "min":
-                self.monitor_op = torch.less_equal
+                self._custom_monitor_op = torch.less_equal
             elif self.mode == "max":
-                self.monitor_op = torch.greater_equal
+                self._custom_monitor_op = torch.greater_equal
             else:
-                self.monitor_op = torch.less_equal # Default for safety
-                print(f"Warning: CustomEarlyStopping mode '{self.mode}' not 'min' or 'max'. Defaulting monitor_op to less_equal for threshold check.")
+                self._custom_monitor_op = torch.less_equal # Default for safety
+                print(f"Warning: CustomEarlyStopping mode '{self.mode}' not 'min' or 'max'. Defaulting _custom_monitor_op to less_equal for threshold check.")
         else:
-            self.monitor_op = monitor_op
-        print(f"CustomEarlyStopping initialized. Monitor: {self.monitor}, Mode: {self.mode}, Patience: {self.patience}, Threshold: {self.stopping_threshold}")
+            self._custom_monitor_op = monitor_op
+        print(f"CustomEarlyStopping initialized. Monitor: {self.monitor}, Mode: {self.mode}, Patience: {self.patience}, Threshold: {self.stopping_threshold}, Custom Op: {self._custom_monitor_op.__name__ if hasattr(self._custom_monitor_op, '__name__') else 'N/A'}")
 
     def _evaluate_stopping_criteria(self, current_value: torch.Tensor) -> Tuple[bool, str]:
         should_stop, reason = super()._evaluate_stopping_criteria(current_value)
         if not should_stop and self.stopping_threshold is not None:
-            # Ensure threshold is a tensor on the same device for comparison
             threshold_tensor = torch.tensor(self.stopping_threshold, device=current_value.device, dtype=current_value.dtype)
-            if self.monitor_op(current_value, threshold_tensor):
+            # Use the _custom_monitor_op for the threshold check
+            if self._custom_monitor_op(current_value, threshold_tensor):
                 should_stop = True
-                reason = f"Metric {self.monitor}={current_value:.6f} reached stopping threshold {self.stopping_threshold:.6f} (op: {self.monitor_op.__name__}). Signaling Trainer to stop."
+                # Use self.monitor (from parent) for the logging message, as it's the metric being monitored.
+                reason = f"Metric {self.monitor}={current_value:.6f} reached stopping threshold {self.stopping_threshold:.6f} (op: {self._custom_monitor_op.__name__ if hasattr(self._custom_monitor_op, '__name__') else 'N/A'}). Signaling Trainer to stop."
                 print(reason)
         return should_stop, reason
 
@@ -61,15 +62,26 @@ def train_actuator_model(cfg: DictConfig) -> None:
     # are expected to be directly in cfg.model and will be passed via **model_cfg_dict
     model_cfg_dict = OmegaConf.to_container(cfg.model, resolve=True)
     model_cfg_dict['input_dim'] = datamodule.get_input_dim() # Should be 3
+    
+    # Extract the model type name (e.g., 'gru' or 'mlp')
+    # The 'model_type' in cfg.model is a dict like {'name': 'gru'} due to Hydra's defaults list.
+    # ActuatorModel expects a string for 'model_type'.
+    if isinstance(model_cfg_dict.get('model_type'), dict) and 'name' in model_cfg_dict['model_type']:
+        model_type_name = model_cfg_dict['model_type']['name']
+        # Replace the model_type dict with its name for ActuatorModel constructor
+        model_cfg_dict['model_type'] = model_type_name
+    # else: model_type might already be a string or not set, or not in the expected dict format.
+    # Consider adding a check or error if model_type is not resolvable to a string.
+    
     # model_cfg_dict['sampling_frequency'] = sampling_freq # REMOVED - ActuatorModel no longer takes this
     
     # Common callbacks are defined as types and instantiated per run/fold
     common_callbacks_types = []
-    if cfg.callbacks.get('learning_rate_monitor', True):
+    if cfg.train.callbacks.get('learning_rate_monitor', True):
         common_callbacks_types.append(LearningRateMonitor)
-    if cfg.callbacks.get('early_summary', False):
+    if cfg.train.callbacks.get('early_summary', False):
         common_callbacks_types.append(EarlySummary)
-    if cfg.callbacks.get('test_prediction_plotter', False):
+    if cfg.train.callbacks.get('test_prediction_plotter', False):
         common_callbacks_types.append(TestPredictionPlotter)
 
     # --- Training Execution --- 

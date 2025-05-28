@@ -1,8 +1,5 @@
-\
 defaults:
   - model_type: gru # Can be mlp or gru. This will load configs/model/model_type/${model_type}.yaml
-  - override hydra/job_logging: colorlog # stdout/stderr logging
-  - override hydra/hydra_logging: colorlog
 
 # Parameters for ActuatorModel constructor
 # These are common across MLP and GRU or define the residual/physics part.
@@ -37,8 +34,6 @@ loss_diff_weight: 0.1 # Weight for the first-difference of torque predictions in
 # and should be passed to ActuatorModel constructor by the training script.
 # The ActuatorModel __init__ needs to be adapted to accept a sub-dict for these.
 # For now, ActuatorModel takes them as direct args. We will pass them flatly from merged config.
-
-model_type: ${model.model_type.name} # 'mlp' or 'gru'
 
 # MLP specific (will be used if model_type is mlp)
 mlp_hidden_dims: [64, 128, 64]

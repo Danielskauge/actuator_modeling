@@ -1,13 +1,12 @@
-\
 _target_: src.data.datamodule.ActuatorDataModule
 
 # List of configurations for each dataset (mass). Each item is a dict.
 # The training script for LOMO CV will iterate through these, using one for validation/test
 # and the rest for training in each fold.
 dataset_configs:
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_0.csv", inertia: 0.01} # Example from synthetic gen
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_1.csv", inertia: 0.015}
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_2.csv", inertia: 0.02}
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_0.csv", inertia: 0.0100}
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_1.csv", inertia: 0.0150}
+  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_2.csv", inertia: 0.0200}
   # !!! Populate this list with your actual 15 CSV file paths and their inertias !!!
   # e.g.:
   # - {csv_file_path: "actual_data/trial1_massA.csv", inertia: 0.0123}

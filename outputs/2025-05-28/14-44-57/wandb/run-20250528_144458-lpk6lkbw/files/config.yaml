@@ -1,0 +1,676 @@
+_target_:
+    value: src.models.model.ActuatorModel
+_wandb:
+    value:
+        cli_version: 0.19.8
+        m:
+            - "1": gradients/model.gru.bias_ih_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": trainer/global_step
+              "6":
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": lr-AdamW
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.bias._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_ih_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_ih_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_ih_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_ih_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_mae_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_loss_step
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": test_mae_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": test_r2_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.weight.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_mse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_mse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": test_rmse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.bias.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_ih_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": test_loss
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.weight._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l0.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": test_mse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.weight.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_ih_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_hh_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_r2_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_rmse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.weight._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l1._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.bias._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.bias.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_ih_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_loss_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.weight.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_mae_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.weight.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.weight_hh_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.fc.bias.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.fc.bias.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l1.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": train_r2_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_loss
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": val_rmse_epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": epoch
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": parameters/model.gru.bias_ih_l1.values
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.bias_hh_l0.bins
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+            - "1": gradients/model.gru.weight_hh_l0._type
+              "5": 2
+              "6":
+                - 1
+                - 3
+              "7": []
+        python_version: 3.12.8
+        t:
+            "1":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 49
+                - 50
+                - 53
+                - 55
+                - 103
+            "2":
+                - 1
+                - 5
+                - 9
+                - 11
+                - 49
+                - 50
+                - 53
+                - 55
+                - 103
+            "3":
+                - 1
+                - 7
+                - 13
+                - 16
+                - 23
+                - 55
+                - 66
+            "4": 3.12.8
+            "5": 0.19.8
+            "6": 4.48.3
+            "8":
+                - 5
+            "12": 0.19.8
+            "13": linux-x86_64
+accel_axis_for_torque:
+    value: Acc_Y
+batch_size:
+    value: 32
+data:
+    value:
+        _target_: src.data.datamodule.ActuatorDataModule
+        accel_axis_for_torque: Acc_Y
+        batch_size: 32
+        dataset_configs:
+            - csv_file_path: data/synthetic_raw/synthetic_actuator_data_mass_0.csv
+              inertia: 0.01
+            - csv_file_path: data/synthetic_raw/synthetic_actuator_data_mass_1.csv
+              inertia: 0.015
+            - csv_file_path: data/synthetic_raw/synthetic_actuator_data_mass_2.csv
+              inertia: 0.02
+        fallback_sampling_frequency: 100
+        global_train_ratio: 0.7
+        global_val_ratio: 0.15
+        gyro_axis_for_ang_vel: Gyro_Z
+        num_workers: 4
+        radius_accel: 0.2
+        radius_load: 0.3
+        seed: 42
+        target_name: tau_measured
+dataset_configs:
+    value: '[{''csv_file_path'': ''data/synthetic_raw/synthetic_actuator_data_mass_0.csv'', ''inertia'': 0.01}, {''csv_file_path'': ''data/synthetic_raw/synthetic_actuator_data_mass_1.csv'', ''inertia'': 0.015}, {''csv_file_path'': ''data/synthetic_raw/synthetic_actuator_data_mass_2.csv'', ''inertia'': 0.02}]'
+debug:
+    value: false
+evaluation_mode:
+    value: global
+fallback_sampling_frequency:
+    value: 100
+global_train_ratio:
+    value: 0.7
+global_val_ratio:
+    value: 0.15
+gru_dropout:
+    value: 0.1
+gru_hidden_dim:
+    value: 128
+gru_num_layers:
+    value: 2
+gyro_axis_for_ang_vel:
+    value: Gyro_Z
+input_dim:
+    value: 3
+k_spring:
+    value: 0
+kd_phys:
+    value: 0
+kp_phys:
+    value: 0
+learning_rate:
+    value: 0.001
+loss_diff_weight:
+    value: 0.1
+mlp_activation:
+    value: relu
+mlp_dropout:
+    value: 0.1
+mlp_hidden_dims:
+    value:
+        - 64
+        - 128
+        - 64
+mlp_use_batch_norm:
+    value: true
+model:
+    value:
+        _target_: src.models.model.ActuatorModel
+        gru_dropout: 0.1
+        gru_hidden_dim: 128
+        gru_num_layers: 2
+        k_spring: 0
+        kd_phys: 0
+        kp_phys: 0
+        learning_rate: 0.001
+        loss_diff_weight: 0.1
+        mlp_activation: relu
+        mlp_dropout: 0.1
+        mlp_hidden_dims:
+            - 64
+            - 128
+            - 64
+        mlp_use_batch_norm: true
+        model_type:
+            name: gru
+        theta0: 0
+        use_residual: false
+        warmup_epochs: 1
+        weight_decay: 1e-06
+model_type:
+    value: gru
+num_workers:
+    value: 4
+outputs_dir:
+    value: /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/14-44-57
+radius_accel:
+    value: 0.2
+radius_load:
+    value: 0.3
+seed:
+    value: 42
+target_name:
+    value: tau_measured
+theta0:
+    value: 0
+train:
+    value:
+        accelerator: auto
+        batch_size: 32
+        callbacks:
+            early_summary: false
+            learning_rate_monitor: true
+            test_prediction_plotter: true
+        checkpointing:
+            filename: best_model-{epoch:02d}-{val_rmse_epoch:.4f}
+            mode: min
+            monitor: val_rmse_epoch
+            save_top_k: 1
+        data: ../data/actuator_data.yaml
+        deterministic_trainer: true
+        devices: 1
+        early_stopping:
+            active: true
+            min_delta: 0.0001
+            mode: min
+            monitor: val_rmse_epoch
+            patience: 20
+            stopping_threshold: null
+            verbose: true
+        gradient_clip_algorithm: norm
+        gradient_clip_val: 5
+        learning_rate: 0.001
+        log_frequency: 50
+        max_epochs: 200
+        model: ../model/mlp.yaml
+        num_workers: 4
+        patience: 20
+        precision: 32-true
+        val_check_interval: 1
+        wandb:
+            project_name: actuator-modeling
+        weight_decay: 1e-06
+use_residual:
+    value: false
+wandb:
+    value:
+        active: true
+        entity: ""
+        group_suffix: initial_tests
+        name_suffix: debug
+        project: actuator_modeling_gru_v2
+        watch_log_freq: 100
+warmup_epochs:
+    value: 1
+weight_decay:
+    value: 1e-06
+work_dir:
+    value: /home/daniel/workspace/actuator_modeling
