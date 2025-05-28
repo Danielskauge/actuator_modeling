@@ -54,7 +54,7 @@ class ModelExporter(Callback):
                 print(f"TorchScript export failed: {e}")
                 print("Saving the model state dict instead...")
                 state_dict_path = os.path.join(self.output_dir, "model_state_dict.pt")
-                torch.save(pl_module.state_dict(), state_dict_path)
+                torch.save(pl_module.model.state_dict(), state_dict_path)
                 print(f"Model state dict saved to {state_dict_path}")
         
         # Export to ONNX

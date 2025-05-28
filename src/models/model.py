@@ -334,7 +334,7 @@ class ActuatorModel(pl.LightningModule):
                 return float(current_step) / float(num_warmup_steps)
             
             progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
-            return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi))))
+            return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item()))
 
         scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda_fn)
         

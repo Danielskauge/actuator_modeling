@@ -55,10 +55,6 @@ class MLP(nn.Module):
         # Create layers
         self.layers = nn.ModuleList()
         
-        print(f"input_dim: {input_dim}", type(input_dim))
-        print(f"hidden_dims[0]: {hidden_dims[0]}", type(hidden_dims[0]))
-        
-        
         # Input layer
         self.layers.append(nn.Linear(input_dim, hidden_dims[0]))
         

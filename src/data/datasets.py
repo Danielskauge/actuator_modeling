@@ -197,19 +197,9 @@ if __name__ == '__main__':
     dummy_data.to_csv(dummy_csv_path, index=False)
     print(f"Dummy data saved to {dummy_csv_path}")
 
-    # Define features required by the model, especially for tau_phys calculation
-    # Order matters if _calculate_tau_phys in the LightningModule uses hardcoded indices.
-    # current_angle_rad, target_angle_rad, current_ang_vel_rad_s, target_ang_vel_rad_s
-    # then Acc_X_raw, Acc_Y_raw, Acc_Z_corrected
-    model_input_features = [
-        'current_angle_rad', 
-        'target_angle_rad', 
-        'current_ang_vel_rad_s', 
-        'target_ang_vel_rad_s',
-        'Acc_X_raw',
-        'Acc_Y_raw',
-        'Acc_Z_corrected'
-    ]
+    # Define features required by the model
+    # This should align with ActuatorDataset.FEATURE_NAMES
+    model_input_features = ActuatorDataset.FEATURE_NAMES 
 
     test_inertia = 0.05 # kg*m^2
     test_radius_accel = 0.2 # m
@@ -259,15 +249,14 @@ if __name__ == '__main__':
             print(f"Cleaned up {dummy_csv_path}")
 
 """
-Features to be used by the model must be specified in `features_to_use`.
-The order of the first four features in this list is critical if `use_residual=True` in `ActuatorModel`,
-as `_calculate_tau_phys` assumes:
-- Index 0: current_angle_rad
-- Index 1: target_angle_rad
-- Index 2: current_ang_vel_rad_s
-- Index 3: target_ang_vel_rad_s
+Features used by the model are defined by ActuatorDataset.FEATURE_NAMES:
+- current_angle_rad
+- target_angle_rad
+- current_ang_vel_rad_s
 
-The remaining features can be in any order and will be appended.
-The `input_dim` for the model will be `len(features_to_use)`.
-The target is `tau_measured`.
+The ActuatorModel uses these features. If ActuatorModel's use_residual=True,
+its _calculate_tau_phys method assumes this order for its internal calculations if it were
+to use these features directly from the sequence (though it receives the full sequence).
+The input_dim for the model is determined by len(ActuatorDataset.FEATURE_NAMES).
+The target is always 'tau_measured'.
 """

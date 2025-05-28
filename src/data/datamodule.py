@@ -381,7 +381,6 @@ class ActuatorDataModule(pl.LightningDataModule):
     def get_sequence_length(self) -> int: return self.sequence_length
     def get_sampling_frequency(self) -> Optional[float]: return self.sampling_frequency
     def get_num_lomo_folds(self) -> int:
-        # self._load_all_datasets_once() # Called in prepare_data
         return len(self.ordered_group_ids)
 
     def get_input_normalization_stats(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
