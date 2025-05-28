@@ -55,26 +55,36 @@ def train_actuator_model(cfg: DictConfig) -> None:
     pl.seed_everything(cfg.seed, workers=True)
 
     datamodule: ActuatorDataModule = hydra.utils.instantiate(cfg.data)
-    datamodule.setup() # This loads all_datasets_loaded (internal list of ActuatorDataset objects)
+    # datamodule.setup() # Original call to PL setup(), which calls prepare_data().
+    # prepare_data() now calls _load_all_datasets_once().
+    # Normalization stats will be computed by setup_for_global_run() using the global train split.
+    datamodule.prepare_data() # Ensures all raw datasets are loaded.
 
-    # --- Model Instantiation Args Preparation (input_dim is dynamic) ---
-    # All other model parameters (like gru_hidden_dim, use_residual, etc.) 
-    # are expected to be directly in cfg.model and will be passed via **model_cfg_dict
+    # --- Model Instantiation Args Preparation ---
     model_cfg_dict = OmegaConf.to_container(cfg.model, resolve=True)
-    model_cfg_dict['input_dim'] = datamodule.get_input_dim() # Should be 3
-    
-    # Extract the model type name (e.g., 'gru' or 'mlp')
-    # The 'model_type' in cfg.model is a dict like {'name': 'gru'} due to Hydra's defaults list.
-    # ActuatorModel expects a string for 'model_type'.
+    model_cfg_dict['input_dim'] = datamodule.get_input_dim()
+
     if isinstance(model_cfg_dict.get('model_type'), dict) and 'name' in model_cfg_dict['model_type']:
         model_type_name = model_cfg_dict['model_type']['name']
-        # Replace the model_type dict with its name for ActuatorModel constructor
         model_cfg_dict['model_type'] = model_type_name
-    # else: model_type might already be a string or not set, or not in the expected dict format.
-    # Consider adding a check or error if model_type is not resolvable to a string.
     
-    # model_cfg_dict['sampling_frequency'] = sampling_freq # REMOVED - ActuatorModel no longer takes this
+    # --- Call setup_for_global_run ONCE to compute normalization stats if LOMO CV or Global ---
+    # This ensures that normalization stats are based on a consistent (global) training set view.
+    # setup_for_global_run internally computes and stores these stats.
+    # print("\n--- Ensuring normalization statistics are computed based on global training data ---")
+    # datamodule.setup_for_global_run() # This will define global_train_dataset and compute stats from it.
     
+    # input_stats = datamodule.get_input_normalization_stats()
+    # target_stats = datamodule.get_target_normalization_stats()
+
+    # if input_stats is None or target_stats is None:
+    #     raise RuntimeError("Normalization statistics were not computed by the DataModule. Cannot proceed.")
+    
+    # model_cfg_dict['input_mean'], model_cfg_dict['input_std'] = input_stats
+    # model_cfg_dict['target_mean'], model_cfg_dict['target_std'] = target_stats
+    # print("Normalization stats retrieved and will be passed to ActuatorModel.")
+    # model_cfg_dict['sampling_frequency'] = sampling_freq # REMOVED
+
     # Common callbacks are defined as types and instantiated per run/fold
     common_callbacks_types = []
     if cfg.train.callbacks.get('learning_rate_monitor', True):
@@ -87,10 +97,26 @@ def train_actuator_model(cfg: DictConfig) -> None:
     # --- Training Execution --- 
     if evaluation_mode == "global":
         print("\n===== GLOBAL EVALUATION MODE =====")
-        datamodule.setup_for_global_run()
+        print("Setting up data and computing normalization statistics for global run...")
+        datamodule.setup_for_global_run() # Computes and stores global normalization stats
         
-        # Instantiate model for global run
-        model_global = ActuatorModel(**model_cfg_dict)
+        input_stats_global = datamodule.get_input_normalization_stats()
+        target_stats_global = datamodule.get_target_normalization_stats()
+        if input_stats_global is None or target_stats_global is None:
+            raise RuntimeError("Global normalization statistics were not computed by the DataModule. Cannot proceed.")
+        
+        model_cfg_dict_global = model_cfg_dict.copy() # Use a copy for global model
+        model_cfg_dict_global['input_mean'], model_cfg_dict_global['input_std'] = input_stats_global
+        model_cfg_dict_global['target_mean'], model_cfg_dict_global['target_std'] = target_stats_global
+        print("Global normalization stats retrieved and will be passed to ActuatorModel for global run.")
+
+        # Ensure we are using the datasets set up by the prior call to setup_for_global_run()
+        if datamodule.global_train_dataset is None:
+             raise RuntimeError("Global train dataset not available after setup_for_global_run. This should not happen.")
+        # print("Using pre-established global data splits and normalization stats for global run.") # Redundant now
+        
+        # Instantiate model for global run (model_cfg_dict_global now includes normalization stats)
+        model_global = ActuatorModel(**model_cfg_dict_global)
 
         run_name_global = f"{model_global.hparams.model_type}-global_{cfg.wandb.get('name_suffix', '')}"
 
@@ -154,23 +180,39 @@ def train_actuator_model(cfg: DictConfig) -> None:
         print("\n===== LOMO CROSS-VALIDATION MODE =====")
         num_folds = datamodule.get_num_lomo_folds()
         if num_folds == 0:
-            raise ValueError("No datasets found for LOMO CV. Check data.dataset_configs.")
-        if num_folds < 2 and num_folds > 0: # If only 1 dataset, LOMO CV doesn't make sense for generalization testing.
-            print("Warning: Only 1 dataset found. LOMO CV will run for 1 fold. This is similar to a global run but uses LOMO data setup logic. Consider using 'global' evaluation_mode for a single dataset.")
-        elif num_folds == 0:
-             raise ValueError("LOMO CV requires at least one dataset.")
-
+            raise ValueError("No inertia groups found for LOMO CV. Check data.inertia_groups.")
+        if num_folds < 2: # If only 1 group, LOMO CV doesn't make sense for generalization.
+            print("Warning: Only 1 inertia group found. LOMO CV will run for 1 fold. Generalization to unseen inertias cannot be meaningfully tested. This is similar to a global run.")
+        
         all_fold_test_metrics = []
+
+        # Normalization stats (input_mean, input_std, target_mean, target_std) are ALREADY in model_cfg_dict
+        # from the setup_for_global_run() call made earlier.
+        # ActuatorDataModule.setup_for_lomo_fold() will verify these stats are present.
 
         for fold_idx in range(num_folds):
             print(f"\n===== FOLD {fold_idx + 1} / {num_folds} =====")
             
-            # Instantiate a fresh model for each fold
-            # model_cfg_dict already has input_dim correctly set
-            model_fold = ActuatorModel(**model_cfg_dict)
+            # Setup data for the current LOMO fold. 
+            # This will also compute and store FOLD-SPECIFIC normalization stats in the datamodule.
+            datamodule.setup_for_lomo_fold(fold_idx)
+
+            input_stats_fold = datamodule.get_input_normalization_stats()
+            target_stats_fold = datamodule.get_target_normalization_stats()
+            if input_stats_fold is None or target_stats_fold is None:
+                raise RuntimeError(f"Fold-specific normalization statistics were not computed for fold {fold_idx + 1}. Cannot proceed.")
+
+            model_cfg_dict_fold = model_cfg_dict.copy()
+            model_cfg_dict_fold['input_mean'], model_cfg_dict_fold['input_std'] = input_stats_fold
+            model_cfg_dict_fold['target_mean'], model_cfg_dict_fold['target_std'] = target_stats_fold
+            print(f"Fold {fold_idx+1} normalization stats retrieved and will be passed to ActuatorModel.")
+
+            # Instantiate a fresh model for each fold, passing the FOLD-SPECIFIC global normalization stats
+            model_fold = ActuatorModel(**model_cfg_dict_fold)
             run_name_fold = f"{model_fold.hparams.model_type}-fold_{fold_idx + 1}_{cfg.wandb.get('name_suffix', '')}"
             
-            datamodule.setup_for_lomo_fold(fold_idx)
+            # Setup data for the current LOMO fold. This uses the pre-computed global norm stats.
+            # datamodule.setup_for_lomo_fold(fold_idx) # Already called above
 
             callbacks_fold = [CB() for CB in common_callbacks_types]
             checkpoint_callback_fold = ModelCheckpoint(

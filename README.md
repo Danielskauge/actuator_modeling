@@ -48,6 +48,7 @@ The project aims to predict the torque applied by an actuator based on its state
         *   Calculates the target `tau_measured` (measured torque) using the formula `inertia * angular_acceleration_from_tangential_accelerometer`.
         *   Extracts a fixed set of **3 input features** for the model: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`. The explicit `target_ang_vel_rad_s` feature has been removed, relying on the sequence of target angles to implicitly convey this information to the neural network.
     *   Shapes the data into sequences of a fixed length (`SEQUENCE_LENGTH = 2` by default) suitable for recurrent or time-aware models. The target torque corresponds to the state at the end of the sequence.
+    *   **Important**: `ActuatorDataset` returns **raw, unnormalized** feature sequences (`x_sequence`) and target torques (`y_torque`) as PyTorch tensors. It does not perform statistical normalization (e.g., z-scoring).
     *   Provides static methods `get_input_dim()` (which will return 3) and `get_sequence_length()` for consistent model initialization, and `get_sampling_frequency()` (though this is not directly used by `ActuatorModel` anymore).
 
 *   **`src/data/datamodule.py:ActuatorDataModule`**:
@@ -57,9 +58,18 @@ The project aims to predict the torque applied by an actuator based on its state
         *   `folder`: The subfolder name under the base data directory
         *   `inertia`: The numerical inertia value for all CSV files in this group
     *   Automatically discovers and loads all `*.csv` files within each group's subfolder.
+    *   **Normalization Strategy**: `ActuatorDataModule` is responsible for calculating and providing the necessary normalization statistics (mean and standard deviation) for both input features and the target torque. This is handled differently based on the evaluation mode:
+        *   **Global Run Mode (`setup_for_global_run`)**:
+            *   After combining all datasets and performing a single train/validation/test split on this aggregated data, normalization statistics are computed **exclusively from the `global_train_dataset`**.
+            *   These global statistics are stored within the datamodule instance.
+        *   **LOMO CV Fold Mode (`setup_for_lomo_fold`)**:
+            *   For each fold, one entire inertia group is held out as the validation and test set.
+            *   Normalization statistics are computed **independently for each fold, using only the `current_fold_train_dataset`** (i.e., data from all inertia groups *except* the one held out for that fold). This ensures that no information from the fold's validation/test set influences the normalization process, preventing data leakage.
+            *   These fold-specific statistics are stored within the datamodule instance for the current fold.
+    *   Provides accessor methods (`get_input_normalization_stats()`, `get_target_normalization_stats()`) for the training script to retrieve the relevant statistics.
     *   Supports two primary setup modes for evaluation (controlled by the main training script via `cfg.evaluation_mode`):
-        1.  **Global Run Mode (`setup_for_global_run`)**: Combines all individual datasets from all groups and performs a single train/validation/test split on this aggregated data. This is used to assess overall model learning capability.
-        2.  **LOMO CV Fold Mode (`setup_for_lomo_fold`)**: Sets up data for a specific fold in Leave-One-Mass-Out Cross-Validation. In each fold, one entire inertia group (all CSV files for that inertia) is held out as the validation and test set (unseen inertia), while datasets from all other groups are used for training. This rigorously tests generalization to new inertias.
+        1.  **Global Run Mode (`setup_for_global_run`)**: Combines all individual datasets from all groups and performs a single train/validation/test split on this aggregated data. This is used to assess overall model learning capability. Normalization stats are derived from this mode's training split.
+        2.  **LOMO CV Fold Mode (`setup_for_lomo_fold`)**: Sets up data for a specific fold in Leave-One-Mass-Out Cross-Validation. In each fold, one entire inertia group (all CSV files for that inertia) is held out as the validation and test set (unseen inertia), while datasets from all other groups are used for training. Normalization stats are derived from this fold's specific training set. This rigorously tests generalization to new inertias.
     *   Provides the necessary `train_dataloader()`, `val_dataloader()`, and `test_dataloader()` based on the active mode.
 
 ### Model Architectures
@@ -73,12 +83,19 @@ The project aims to predict the torque applied by an actuator based on its state
     *   Configurable hidden layer dimensions, activation function, dropout, and batch normalization.
 *   **`src/models/model.py:ActuatorModel`**:
     *   The main `LightningModule` that wraps the chosen neural network (e.g., `GRUModel`).
-    *   **Dynamically configured `input_dim` (now 3)** is passed during instantiation from the `ActuatorDataModule` via the training script. (`sampling_frequency` is no longer passed to `ActuatorModel`).
+    *   **Dynamically configured `input_dim` (now 3)** is passed during instantiation from the `ActuatorDataModule` via the training script.
+    *   **Normalization Handling**:
+        *   Accepts pre-calculated `input_mean`, `input_std`, `target_mean`, and `target_std` during initialization. These statistics are provided by the `ActuatorDataModule` (and are specific to the global training set or the current LOMO CV fold's training set) and are registered as buffers within the model.
+        *   **Input Normalization**: In its `step` method, raw input sequences `x` (from `ActuatorDataset`) are normalized using the provided `input_mean` and `input_std` before being fed into the underlying neural network (MLP or GRU).
+        *   **Target Normalization for Loss**: The raw target torque `y_measured_torque` is also normalized using `target_mean` and `target_std`. The loss function is computed against this normalized target.
+        *   **Residual Modeling with Normalization**:
+            *   If `use_residual: True`, the `_calculate_tau_phys` method computes the physics-based torque component using the **original, raw (unnormalized)** input features `x`.
+            *   The resulting `tau_phys` (in physical units) is then **normalized** using `target_mean` and `target_std`.
+            *   The model is trained to predict the difference between the *normalized* `y_measured_torque` and this *normalized* `tau_phys`. The model's direct output is thus a normalized residual.
+        *   **Denormalization for Metrics**: For calculating performance metrics (MSE, RMSE, MAE, R2), the model's final prediction (which is in the normalized scale, and includes the re-addition of the *normalized* `tau_phys` if in residual mode) is **denormalized** back to the original physical scale using `target_mean` and `target_std`. Metrics are then computed by comparing this denormalized prediction against the original, raw `y_measured_torque`. This ensures metrics are interpretable in their physical units.
     *   Handles the training, validation, and test steps.
-    *   Calculates loss (MSE by default, with an optional first-difference torque smoothing term).
-    *   Computes and logs various metrics (MSE, RMSE, MAE, R2).
-    *   **Residual Modeling**: Can be configured to predict either the full torque or a residual torque (`tau_measured - tau_phys`).
-        *   `_calculate_tau_phys`: Calculates a physics-based torque component. For the `kd_phys * error_dot` term, the **target angular velocity is assumed to be zero**. Thus, this term simplifies to `-kd_phys * current_ang_vel`.
+    *   Calculates loss (MSE by default, with an optional first-difference torque smoothing term) on normalized values.
+    *   Computes and logs various metrics (MSE, RMSE, MAE, R2) on denormalized, physical-scale values.
     *   Implements optimizer (AdamW) and learning rate scheduler (linear warmup followed by cosine decay).
 
 ### Training and Evaluation
@@ -218,6 +235,12 @@ The `ActuatorDataModule` and the main training script (`scripts/train_model.py`)
 ### Running Training
 
 Commands are executed from the root of the `actuator_modeling` directory.
+The `scripts/train_model.py` script orchestrates the training process. It:
+*   Instantiates `ActuatorDataModule`.
+*   Calls the appropriate setup method on the datamodule (`setup_for_global_run` or, within a loop, `setup_for_lomo_fold`). These setup methods now also trigger the calculation of the relevant (global or fold-specific) normalization statistics within the datamodule.
+*   Retrieves these normalization statistics from the datamodule.
+*   Instantiates `ActuatorModel`, passing the retrieved normalization statistics to it.
+*   Initializes and runs the PyTorch Lightning `Trainer`.
 
 ```bash
 # Example for Global Evaluation Mode (assuming it's the default in config.yaml or set via CLI)
@@ -250,10 +273,14 @@ python scripts/train_model.py model.model_type=mlp # Ensure mlp specific params 
 *   **PyTorch Lightning**: Chosen to simplify boilerplate training code, enable easy multi-GPU training, provide robust checkpointing, and integrate well with logging and callbacks.
 *   **Hydra for Configuration**: Provides a highly flexible and powerful way to manage all aspects of the project (data, model, training, logging) through YAML files and command-line overrides. This facilitates experimentation and reproducibility.
 *   **Two-Stage Evaluation Strategy**: Controlled by `evaluation_mode`.
-    1.  **Global Mode**: First, verify the model can learn from the entire dataset distribution.
-    2.  **LOMO CV Mode**: Second, specifically test generalization to unseen inertias, which is critical for real-world applicability. This separation allows for a more structured approach to model development.
+    1.  **Global Mode**: First, verify the model can learn from the entire dataset distribution. Normalization statistics are derived from the training split of this global dataset.
+    2.  **LOMO CV Mode**: Second, specifically test generalization to unseen inertias, which is critical for real-world applicability. Normalization statistics are derived *independently for each fold* from that fold's specific training data (excluding the held-out inertia). This separation allows for a more structured approach to model development and ensures valid generalization assessment.
+*   **Input and Target Normalization**:
+    *   Input features (after initial unit conversions by `ActuatorDataset`) and target torque values are statistically normalized (z-scored) before being used by the neural network for training.
+    *   The normalization statistics (mean and standard deviation) are calculated by `ActuatorDataModule`, ensuring they are derived only from the appropriate training set (either the global training set or the fold-specific training set in LOMO CV).
+    *   `ActuatorModel` performs the normalization of inputs and targets, and denormalizes its output predictions before metric calculation, ensuring metrics are in interpretable physical units. This is crucial for stable training and proper model evaluation.
 *   **Feature Engineering in `ActuatorDataset`**: Centralizing feature calculation (angles to radians, derivatives, `tau_measured`) within the dataset class ensures consistency. The model now uses 3 core input features per timestep (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`).
-*   **Residual Modeling (`ActuatorModel`)**: The option to predict a residual torque (actual torque minus a physics-based model component) can sometimes help the model focus on learning the more complex, unmodeled dynamics. For the physics-based component, the target angular velocity (for the `kd_phys` term) is assumed to be zero.
+*   **Residual Modeling (`ActuatorModel`)**: The option to predict a residual torque (actual torque minus a physics-based model component) can sometimes help the model focus on learning the more complex, unmodeled dynamics. For the physics-based component, the target angular velocity (for the `kd_phys` term) is assumed to be zero. The normalization strategy correctly handles the scales when combining learned residuals with the physics-based component.
 
 ## 7. Future Work and Extensions
 

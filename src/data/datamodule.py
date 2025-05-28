@@ -1,6 +1,6 @@
 import os
 import glob
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import pytorch_lightning as pl
 import torch
@@ -61,6 +61,13 @@ class ActuatorDataModule(pl.LightningDataModule):
         self.input_dim = ActuatorDataset.get_input_dim()
         self.sequence_length = ActuatorDataset.get_sequence_length()
         self.sampling_frequency: Optional[float] = None # Will be determined from the first dataset
+
+        # Normalization statistics
+        self.input_mean: Optional[torch.Tensor] = None
+        self.input_std: Optional[torch.Tensor] = None
+        self.target_mean: Optional[torch.Tensor] = None
+        self.target_std: Optional[torch.Tensor] = None
+        self._normalization_stats_computed_for_global_train: bool = False
 
     def _load_all_datasets_once(self):
         """Helper to load all ActuatorDataset instances if not already loaded."""
@@ -138,21 +145,90 @@ class ActuatorDataModule(pl.LightningDataModule):
     def prepare_data(self):
         # This ensures data (CSVs) are accessible.
         # Actual loading into ActuatorDataset happens in setup methods via _load_all_datasets_once.
-        pass
+        # Normalization stats will be computed in setup based on the training set.
+        self._load_all_datasets_once()
+
+    def _calculate_normalization_stats(self, reference_dataset: Dataset):
+        """
+        Calculates and stores normalization statistics (mean, std) for inputs and targets
+        based on the provided reference_dataset.
+        This method should ideally be called only once with the global training dataset.
+        """
+        print(f"  Calculating normalization statistics from {len(reference_dataset)} samples in the reference dataset...")
+        if len(reference_dataset) == 0:
+            print("  Warning: Reference dataset for normalization is empty. Stats will be 0 for mean and 1 for std.")
+            input_dim = ActuatorDataset.get_input_dim()
+            self.input_mean = torch.zeros(input_dim)
+            self.input_std = torch.ones(input_dim)
+            self.target_mean = torch.zeros(1)
+            self.target_std = torch.ones(1)
+            # If this was intended for the global train set, mark it as "computed" (even if badly)
+            if reference_dataset == self.global_train_dataset: # Check identity
+                self._normalization_stats_computed_for_global_train = True
+            return
+
+        temp_loader = DataLoader(reference_dataset, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_workers)
+        all_inputs_flattened = []
+        all_targets = []
+
+        for x_batch, y_batch in temp_loader:
+            # x_batch: (batch_size, seq_len, input_dim)
+            # y_batch: (batch_size, 1) or (batch_size,)
+            all_inputs_flattened.append(x_batch.reshape(-1, x_batch.size(-1))) # Flatten seq_len into batch dim
+            all_targets.append(y_batch.reshape(-1, 1)) # Ensure target is [N, 1]
+
+        if not all_inputs_flattened or not all_targets:
+            print("  Warning: No data collected from reference dataset for normalization. Stats will be 0 for mean and 1 for std.")
+            input_dim = ActuatorDataset.get_input_dim()
+            self.input_mean = torch.zeros(input_dim)
+            self.input_std = torch.ones(input_dim)
+            self.target_mean = torch.zeros(1)
+            self.target_std = torch.ones(1)
+            if reference_dataset == self.global_train_dataset:
+                 self._normalization_stats_computed_for_global_train = True
+            return
+
+        stacked_inputs = torch.cat(all_inputs_flattened, dim=0)   # Shape: (total_samples * seq_len, input_dim)
+        stacked_targets = torch.cat(all_targets, dim=0) # Shape: (total_samples, 1)
+
+        self.input_mean = torch.mean(stacked_inputs, dim=0)
+        self.input_std = torch.std(stacked_inputs, dim=0)
+        self.input_std[self.input_std < 1e-6] = 1.0 # Prevent division by zero / very small std
+
+        self.target_mean = torch.mean(stacked_targets, dim=0) # Shape (1,)
+        self.target_std = torch.std(stacked_targets, dim=0)   # Shape (1,)
+        self.target_std[self.target_std < 1e-6] = 1.0
+
+        print(f"  Input Mean: {self.input_mean.tolist()}")
+        print(f"  Input Std:  {self.input_std.tolist()}")
+        print(f"  Target Mean: {self.target_mean.tolist()}") # target_mean is a tensor, convert to list
+        print(f"  Target Std:  {self.target_std.tolist()}")  # target_std is a tensor, convert to list
+        
+        # This flag is now specific to when stats are computed for the global_train_dataset
+        if hasattr(self, 'global_train_dataset') and self.global_train_dataset is not None and \
+           reference_dataset == self.global_train_dataset: 
+            self._normalization_stats_computed_for_global_train = True
+        # For LOMO, stats are computed per fold, so this global flag isn't set by LOMO's reference_dataset
 
     def setup(self, stage: Optional[str] = None):
         """
         This method is called by PyTorch Lightning.
         For this DataModule, the actual setup (global split or fold setup)
-        is deferred to specific methods like `setup_for_global_run` or `setup_for_lomo_fold`.
-        This main setup ensures all raw datasets are loaded once.
+        is deferred to specific methods like `setup_for_global_run` or `setup_for_lomo_fold`,
+        which are expected to be called by the main training script.
+        This main setup() currently does not perform split-specific logic itself.
+        Ensure `prepare_data()` (which calls `_load_all_datasets_once()`) has been called.
         """
-        self._load_all_datasets_once()
-        # The actual mode-specific setup will be called externally.
+        # _load_all_datasets_once() is called in prepare_data
+        # The mode-specific setups (setup_for_global_run or setup_for_lomo_fold)
+        # are responsible for setting up datasets and calculating normalization stats if needed.
+        # If PL calls this automatically, it doesn't inherently know which mode to set up.
+        # The training script should explicitly call the mode-specific setup.
+        pass
 
     def setup_for_global_run(self):
         """Sets up the DataModule for a single global train/val/test run."""
-        self._load_all_datasets_once()
+        # _load_all_datasets_once() # Called in prepare_data
         self._current_mode = "global"
         
         # Collect all datasets from all groups
@@ -189,9 +265,25 @@ class ActuatorDataModule(pl.LightningDataModule):
         )
         print(f"  Global split: {len(self.global_train_dataset)} train, {len(self.global_val_dataset)} val, {len(self.global_test_dataset)} test samples.")
 
+        # Calculate normalization stats based on the global_train_dataset if not already done
+        if not self._normalization_stats_computed_for_global_train:
+            if self.global_train_dataset and len(self.global_train_dataset) > 0:
+                self._calculate_normalization_stats(self.global_train_dataset)
+            else:
+                print("Warning: Global train dataset is empty or not set. Cannot compute global normalization stats.")
+                # Fallback to zero mean, one std to prevent errors, though this is not ideal.
+                input_dim = ActuatorDataset.get_input_dim()
+                self.input_mean = torch.zeros(input_dim)
+                self.input_std = torch.ones(input_dim)
+                self.target_mean = torch.zeros(1)
+                self.target_std = torch.ones(1)
+                self._normalization_stats_computed_for_global_train = True # Mark as "done"
+        else:
+            print("  Global normalization stats already computed. Using existing stats.")
+
     def setup_for_lomo_fold(self, fold_index: int):
         """Sets up data for a specific LOMO CV fold. No intra-fold splitting of seen data."""
-        self._load_all_datasets_once()
+        # _load_all_datasets_once() # Called in prepare_data
         self._current_mode = "lomo_fold"
 
         num_total_groups = len(self.ordered_group_ids)
@@ -223,14 +315,27 @@ class ActuatorDataModule(pl.LightningDataModule):
             if i != fold_index:
                 training_datasets.extend(self.datasets_by_group[group_id])
 
-        if not training_datasets:
-            # This would happen if num_total_groups is 1.
-            self.current_fold_train_dataset = None
-            print(f"  Warning: No training datasets for LOMO Fold {fold_index + 1} (total groups: {num_total_groups}). Training will fail if attempted.")
-        else:
+        if training_datasets:
             self.current_fold_train_dataset = ConcatDataset(training_datasets)
             num_training_groups = num_total_groups - 1
             print(f"  Training data for Fold {fold_index + 1}: {len(self.current_fold_train_dataset)} sequences from {num_training_groups} group(s).")
+            # Calculate normalization stats for THIS FOLD's training data
+            if self.current_fold_train_dataset and len(self.current_fold_train_dataset) > 0:
+                self._calculate_normalization_stats(self.current_fold_train_dataset)
+            else:
+                print(f"  Warning: LOMO Fold {fold_index + 1} has no training data. Cannot compute fold-specific normalization stats. Model will use zero mean, unit std.")
+                input_dim = ActuatorDataset.get_input_dim()
+                self.input_mean = torch.zeros(input_dim)
+                self.input_std = torch.ones(input_dim)
+                self.target_mean = torch.zeros(1)
+                self.target_std = torch.ones(1)
+        else: # This case implies no training data for the fold (e.g. only 1 group total)
+             print(f"  Warning: LOMO Fold {fold_index + 1} has no training data. Cannot compute fold-specific normalization stats. Model will use zero mean, unit std.")
+             input_dim = ActuatorDataset.get_input_dim()
+             self.input_mean = torch.zeros(input_dim)
+             self.input_std = torch.ones(input_dim)
+             self.target_mean = torch.zeros(1)
+             self.target_std = torch.ones(1)
 
     def train_dataloader(self) -> DataLoader:
         dataset_to_use = None
@@ -276,8 +381,22 @@ class ActuatorDataModule(pl.LightningDataModule):
     def get_sequence_length(self) -> int: return self.sequence_length
     def get_sampling_frequency(self) -> Optional[float]: return self.sampling_frequency
     def get_num_lomo_folds(self) -> int:
-        self._load_all_datasets_once() # Ensure datasets are counted
+        # self._load_all_datasets_once() # Called in prepare_data
         return len(self.ordered_group_ids)
+
+    def get_input_normalization_stats(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        """Returns the computed mean and std for input features."""
+        if self.input_mean is not None and self.input_std is not None:
+            return self.input_mean, self.input_std
+        print("Warning: Input normalization stats requested but not computed or available.")
+        return None
+
+    def get_target_normalization_stats(self) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
+        """Returns the computed mean and std for the target variable."""
+        if self.target_mean is not None and self.target_std is not None:
+            return self.target_mean, self.target_std
+        print("Warning: Target normalization stats requested but not computed or available.")
+        return None
 
 
 if __name__ == '__main__':

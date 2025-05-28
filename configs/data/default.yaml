@@ -1,7 +1,7 @@
 _target_: src.data.datamodule.ActuatorDataModule
 
 # Base directory containing subfolders for each inertia group
-data_base_dir: "data/real"
+data_base_dir: "data/synthetic_raw"
 
 # List of inertia groups. Each group contains multiple CSV files in its own subfolder.
 # The training script for LOMO CV will iterate through these groups, using one group 

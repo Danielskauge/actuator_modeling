@@ -28,6 +28,11 @@ class ActuatorModel(pl.LightningModule):
         self,
         model_type: str,
         input_dim: int,         # Expect 3 from DataModule (ActuatorDataset.INPUT_DIM)
+        # Normalization stats from DataModule
+        input_mean: torch.Tensor,
+        input_std: torch.Tensor,
+        target_mean: torch.Tensor,
+        target_std: torch.Tensor,
         # sampling_frequency: float, # REMOVED - Not needed if target_ang_vel for physics is 0
         mlp_hidden_dims: list[int] = [64, 128, 64],
         mlp_activation: str = "relu",
@@ -53,6 +58,10 @@ class ActuatorModel(pl.LightningModule):
         Args:
             model_type: 'mlp' or 'gru'
             input_dim: Dimension of input features (per timestep for GRU). Should be 3.
+            input_mean: Mean of input features for normalization.
+            input_std: Standard deviation of input features for normalization.
+            target_mean: Mean of target variable for normalization.
+            target_std: Standard deviation of target variable for normalization.
             # sampling_frequency: REMOVED
             mlp_hidden_dims: List of hidden layer dimensions (for MLP)
             mlp_activation: Activation function (for MLP)
@@ -72,7 +81,13 @@ class ActuatorModel(pl.LightningModule):
             warmup_epochs: Number of epochs for learning rate warmup in cosine scheduler.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["kwargs"])
+        self.save_hyperparameters(ignore=["kwargs", "input_mean", "input_std", "target_mean", "target_std"])
+
+        # Register normalization stats as buffers
+        self.register_buffer("input_mean", input_mean)
+        self.register_buffer("input_std", input_std)
+        self.register_buffer("target_mean", target_mean)
+        self.register_buffer("target_std", target_std)
 
         if self.hparams.input_dim != 3: # Check for 3 features now
             print(f"Warning: ActuatorModel input_dim={self.hparams.input_dim}, but expected 3 after removing target_ang_vel.")
@@ -178,41 +193,70 @@ class ActuatorModel(pl.LightningModule):
         """
         General step function for training, validation, and testing.
         """
-        x, y_measured_torque = batch # x shape: [batch, seq_len, features_per_step]
-                                      # y_measured_torque shape: [batch, 1]
-        y_measured_torque = y_measured_torque.squeeze(-1) # Shape [batch]
+        x, y_measured_torque_raw = batch # x raw, y_measured_torque_raw is in physical units
+        y_measured_torque_raw = y_measured_torque_raw.squeeze(-1) # Shape [batch]
 
-        # y_hat is the direct model output (either full torque or residual torque)
-        y_hat_model_output = self(x).squeeze(-1) # Output shape: [batch]
+        # 1. Normalize inputs (x)
+        # Ensure input_mean and input_std are correctly shaped for broadcasting over (batch, seq_len, features)
+        # Current stats are (features,) or (1, features). Reshape to (1, 1, features) if necessary.
+        mean_x = self.input_mean.view(1, 1, -1) if self.input_mean.ndim == 1 else self.input_mean
+        std_x = self.input_std.view(1, 1, -1) if self.input_std.ndim == 1 else self.input_std
+        x_normalized = (x - mean_x) / (std_x + 1e-7) # Epsilon for stability
 
-        target_for_loss = y_measured_torque 
-        y_pred_final_torque_for_metrics = y_hat_model_output # Default if not residual
+        # 2. Model makes prediction using normalized inputs. Output is in normalized scale.
+        y_hat_model_output_normalized = self(x_normalized).squeeze(-1) # Output shape: [batch]
+
+        # 3. Normalize the raw target torque for loss calculation
+        # target_mean/std are likely (1,) or scalar. Ensure they broadcast with y_measured_torque_raw [batch]
+        mean_y = self.target_mean.squeeze()
+        std_y = self.target_std.squeeze()
+        y_target_for_loss_normalized = (y_measured_torque_raw - mean_y) / (std_y + 1e-7)
+
+        # Prepare target for loss, and final prediction for metrics (initially in normalized scale)
+        final_target_for_loss_normalized = y_target_for_loss_normalized
+        y_pred_final_normalized_for_metrics = y_hat_model_output_normalized
         
+        tau_phys_raw_for_logging = None # For logging original scale tau_phys
+
         if self.use_residual:
-            tau_phys = self._calculate_tau_phys(x).squeeze(-1) # Shape [batch]
-            target_for_loss = y_measured_torque - tau_phys # Model learns residual
-            y_pred_final_torque_for_metrics = y_hat_model_output + tau_phys # Final torque is residual + physics
+            # Calculate tau_phys using RAW (unnormalized) x, as physics model expects physical units
+            tau_phys_raw = self._calculate_tau_phys(x).squeeze(-1) # Shape [batch], physical units
+            tau_phys_raw_for_logging = tau_phys_raw # Save for logging
+            
+            # Normalize tau_phys_raw to the same scale as the target
+            tau_phys_normalized = (tau_phys_raw - mean_y) / (std_y + 1e-7)
+            
+            # Model learns to predict the residual in the normalized space
+            final_target_for_loss_normalized = y_target_for_loss_normalized - tau_phys_normalized
+            
+            # For metrics, add the normalized model output to the normalized physics component
+            y_pred_final_normalized_for_metrics = y_hat_model_output_normalized + tau_phys_normalized
         
-        # Main MSE loss against the (potentially modified) target
-        loss = F.mse_loss(y_hat_model_output, target_for_loss)
+        # 4. Calculate loss using normalized prediction and normalized target
+        loss = F.mse_loss(y_hat_model_output_normalized, final_target_for_loss_normalized)
         
-        # First-difference loss for smoothing (applied to the model's direct output)
-        if self.loss_diff_weight > 0 and len(y_hat_model_output) > 1:
-            diff_y_hat_model_output = torch.diff(y_hat_model_output)
-            diff_target_for_loss = torch.diff(target_for_loss) # Smooth the target the model is trying to learn
-            loss_diff = F.mse_loss(diff_y_hat_model_output, diff_target_for_loss)
+        # First-difference loss for smoothing (applied to the model's direct output in normalized space)
+        if self.loss_diff_weight > 0 and len(y_hat_model_output_normalized) > 1:
+            diff_y_hat_model_output_normalized = torch.diff(y_hat_model_output_normalized)
+            # Smooth the target the model is trying to learn (which is also normalized)
+            diff_final_target_for_loss_normalized = torch.diff(final_target_for_loss_normalized) 
+            loss_diff = F.mse_loss(diff_y_hat_model_output_normalized, diff_final_target_for_loss_normalized)
             loss = loss + self.loss_diff_weight * loss_diff
         
+        # 5. Denormalize the final prediction back to physical scale for metrics
+        y_pred_final_denormalized_for_metrics = y_pred_final_normalized_for_metrics * (std_y + 1e-7) + mean_y
+        
+        # 6. Update metrics using denormalized predictions and raw measured torque
         metrics = getattr(self, f"{stage}_metrics")
-        # Update metrics using the final predicted torque vs. true measured torque
         for name, metric in metrics.items():
-            metric.update(y_pred_final_torque_for_metrics, y_measured_torque) 
+            metric.update(y_pred_final_denormalized_for_metrics, y_measured_torque_raw) 
         
         self.log(f"{stage}_loss", loss, prog_bar=True, on_epoch=True, on_step=(stage == 'train'), sync_dist=True)
-        if self.use_residual:
-            self.log(f"{stage}_tau_phys_mean_abs", torch.mean(torch.abs(tau_phys)), on_epoch=True, on_step=False, sync_dist=True)
+        if self.use_residual and tau_phys_raw_for_logging is not None:
+            # Log the mean absolute value of the ORIGINAL, physical-scale tau_phys
+            self.log(f"{stage}_tau_phys_mean_abs", torch.mean(torch.abs(tau_phys_raw_for_logging)), on_epoch=True, on_step=False, sync_dist=True)
 
-        return {"loss": loss, "preds": y_pred_final_torque_for_metrics, "targets": y_measured_torque}
+        return {"loss": loss, "preds": y_pred_final_denormalized_for_metrics, "targets": y_measured_torque_raw}
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         return self.step(batch, batch_idx, "train")["loss"]
