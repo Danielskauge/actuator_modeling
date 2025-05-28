@@ -41,9 +41,12 @@ def explore_data(data_dir: Path, output_dir: Path):
         print(f"No subdirectories (inertia groups) found in '{data_dir}'.")
         return
 
+    group_data_counts = {}  # To store total rows per inertia group
+
     for group_dir in inertia_groups:
         group_name = group_dir.name
         print(f"\nProcessing inertia group: {group_name}")
+        group_data_counts[group_name] = {'total_rows': 0, 'file_count': 0}
         
         group_output_dir = output_dir / group_name
         group_output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +64,9 @@ def explore_data(data_dir: Path, output_dir: Path):
             except Exception as e:
                 print(f"    Error loading CSV '{csv_file.name}': {e}")
                 continue
+
+            group_data_counts[group_name]['total_rows'] += df.shape[0]
+            group_data_counts[group_name]['file_count'] += 1
 
             print("\n    Basic Information:")
             df.info(buf=open(os.devnull, 'w')) # Suppress default print, manage manually
@@ -127,6 +133,30 @@ def explore_data(data_dir: Path, output_dir: Path):
             print(f"\n  Finished analysis for {csv_file.name}")
         print(f"\nFinished processing inertia group: {group_name}")
 
+    # --- Summary of data amounts per group ---
+    print("\n--- Inertia Group Data Summary ---")
+    if not group_data_counts:
+        print("No data processed to summarize.")
+    else:
+        for group_name, counts in group_data_counts.items():
+            print(f"  Group: {group_name}, Total Rows: {counts['total_rows']}, Files: {counts['file_count']}")
+        
+        # Plotting the summary
+        group_names = list(group_data_counts.keys())
+        total_rows_list = [counts['total_rows'] for counts in group_data_counts.values()]
+
+        if group_names and total_rows_list:
+            plt.figure(figsize=(10, 6))
+            sns.barplot(x=group_names, y=total_rows_list)
+            plt.title('Total Data Rows per Inertia Group')
+            plt.xlabel('Inertia Group')
+            plt.ylabel('Total Number of Rows')
+            plt.xticks(rotation=45, ha="right")
+            plt.tight_layout()
+            summary_plot_filename = output_dir / "inertia_group_data_summary.png"
+            plt.savefig(summary_plot_filename)
+            plt.close()
+            print(f"\nSummary plot saved to: {summary_plot_filename}")
 
 def main():
     parser = argparse.ArgumentParser(
