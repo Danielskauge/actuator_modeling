@@ -5,9 +5,9 @@ model: "../model/mlp.yaml"
 data: "../data/actuator_data.yaml"
 
 # Training parameters
-batch_size: 64
-learning_rate: 0.001
-weight_decay: 0.00001
+batch_size: ${data.batch_size}
+learning_rate: ${model.learning_rate}
+weight_decay: ${model.weight_decay}
 max_epochs: 200
 
 # Early stopping
@@ -48,13 +48,13 @@ precision: "32-true" # or 16-mixed for mixed precision
 # The stopping_threshold logic (<= 0.05 Nm) will be part of the callback setup.
 
 early_stopping:
+  active: true
   monitor: "val_rmse_epoch" # Changed from val_loss. ActuatorModel now logs val_rmse_epoch.
   mode: "min"
   patience: 20      # Number of epochs with no improvement after which training will be stopped.
   min_delta: 0.0001 # Minimum change to qualify as improvement (small for RMSE).
   verbose: True
-  # stopping_threshold: 0.05 # This target (val_rmse_epoch <= 0.05) will be handled by custom logic
-                           # in the EarlyStopping callback in the training script.
+  stopping_threshold: null
 
 # --- Checkpointing --- (can be further customized in the script)
 checkpointing:
@@ -68,3 +68,16 @@ checkpointing:
 
 # --- Reproducibility ---
 # seed: 42 # Set in the main training script via pl.seed_everything()
+
+# --- Trainer Control ---
+deterministic_trainer: true # For pl.Trainer(deterministic=...)
+gradient_clip_val: 5.0
+gradient_clip_algorithm: "norm"
+
+# --- Callbacks Activation (controlled from main training script via cfg.callbacks.*) ---
+# This section is more for noting what's available and can be toggled.
+# The training script reads cfg.callbacks.callback_name to activate them.
+callbacks:
+  learning_rate_monitor: true
+  early_summary: false # Set to true to print model summary at start of training
+  test_prediction_plotter: true # Set to true to plot test predictions at end of testing

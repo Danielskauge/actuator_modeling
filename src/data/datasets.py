@@ -14,15 +14,16 @@ class ActuatorDataset(Dataset):
     
     Processes raw timestamped sensor data from CSV files, performs feature engineering,
     and generates sequences suitable for recurrent neural networks.
+    Input features: current_angle_rad, target_angle_rad, current_ang_vel_rad_s
     """
     
     FEATURE_NAMES = [
         'current_angle_rad',
         'target_angle_rad',
-        'current_ang_vel_rad_s',
-        'target_ang_vel_rad_s'
+        'current_ang_vel_rad_s'
+        # 'target_ang_vel_rad_s' # Removed as per user request
     ]
-    INPUT_DIM = len(FEATURE_NAMES) # Should be 4
+    INPUT_DIM = len(FEATURE_NAMES) # Should be 3 now
     SEQUENCE_LENGTH = 2
 
     def __init__(
@@ -91,7 +92,7 @@ class ActuatorDataset(Dataset):
         
         if self.gyro_axis_for_ang_vel and self.gyro_axis_for_ang_vel + '_rad_s' in df.columns:
             df['current_ang_vel_rad_s'] = df[self.gyro_axis_for_ang_vel + '_rad_s']
-            print(f"Using '{self.gyro_axis_for_ang_vel}_rad_s' for current_ang_vel_rad_s.")
+            # print(f"Using '{self.gyro_axis_for_ang_vel}_rad_s' for current_ang_vel_rad_s.") # Less verbose
         else:
             # Fallback or if explicitly wanting magnitude (though sign is lost)
             # This is generally not recommended if a primary axis is known.
@@ -100,49 +101,39 @@ class ActuatorDataset(Dataset):
             print(f"Warning: Using magnitude of gyro for current_ang_vel_rad_s. Sign information is lost. Gyro_axis specified: {self.gyro_axis_for_ang_vel}")
 
 
-        # 3b. Target Angular Velocity (theta_d_dot) - numerical differentiation
-        df['target_ang_vel_rad_s'] = np.gradient(df['target_angle_rad'], dt_series, edge_order=2)
+        # 3b. Target Angular Velocity (theta_d_dot) - REMOVED
+        # df['target_ang_vel_rad_s'] = np.gradient(df['target_angle_rad'], dt_series, edge_order=2)
 
         # 4. Angular Acceleration (alpha) for tau_measured - numerical differentiation of current_ang_vel
-        df['current_ang_accel_rad_s2'] = np.gradient(df['current_ang_vel_rad_s'], dt_series, edge_order=2)
+        # This is used for calculating the target torque, not as a model input feature directly.
+        df['current_ang_accel_rad_s2_for_target'] = np.gradient(df['current_ang_vel_rad_s'], dt_series, edge_order=2)
         
         # 5. Measured Torque (tau_measured) - Ground Truth
+        # Calculation based on tangential accelerometer: tau = I * (a_tangential / r)
         if self.accel_axis_for_torque not in df.columns:
             raise ValueError(f"Specified accel_axis_for_torque '{self.accel_axis_for_torque}' not found. Columns: {df.columns.tolist()}")
         if self.radius_accel <= 0:
             raise ValueError("radius_accel must be positive.")
-        angular_accel_from_accel = df[self.accel_axis_for_torque] / self.radius_accel
-        df[self.target_name] = self.inertia * angular_accel_from_accel
+        
+        # The acceleration used here is the one related to the chosen tangential axis, 
+        # NOT the one derived from gyro (current_ang_accel_rad_s2_for_target)
+        angular_accel_from_tangential_sensor = df[self.accel_axis_for_torque] / self.radius_accel
+        df[self.target_name] = self.inertia * angular_accel_from_tangential_sensor
 
-        # 6. Accelerometer Data Processing
+
+        # 6. Accelerometer Data Processing (Optional features, not part of core input currently)
         # Remove gravity from Z-axis. Acc_X, Acc_Y are kept as is.
         # This assumes Acc_Z is primarily aligned with gravity.
-        df['Acc_Z_corrected'] = df['Acc_Z'] - G_ACCEL 
-        # Other axes are kept as they are, they might contain dynamic accelerations
-        # or components of gravity if there's misalignment, which the model might learn to interpret.
-        df['Acc_X_raw'] = df['Acc_X'] # Keep raw for features
-        df['Acc_Y_raw'] = df['Acc_Y'] # Keep raw for features
-
-
-        # --- Define final feature columns for the model ---
-        # These are the names the model's _calculate_tau_phys will expect at specific indices
-        # if use_residual=True.
-        # Index 0: current_angle_rad
-        # Index 1: target_angle_rad
-        # Index 2: current_ang_vel_rad_s
-        # Index 3: target_ang_vel_rad_s
-        # These MUST be part of self.features_to_use and in this order if used by _calculate_tau_phys.
-        
-        # For clarity, let's rename columns to match expected feature names if they are in features_to_use
-        # This is more of a sanity check; features_to_use list drives selection.
-        # Example: if 'current_angle_rad' is in features_to_use, it will be picked up.
+        # df['Acc_Z_corrected'] = df['Acc_Z'] - G_ACCEL 
+        # df['Acc_X_raw'] = df['Acc_X'] 
+        # df['Acc_Y_raw'] = df['Acc_Y']
 
         # Ensure all requested features are present
         missing_features = [f for f in self.FEATURE_NAMES if f not in df.columns]
         if missing_features:
             raise ValueError(f"Missing required features after processing: {missing_features}. Available: {df.columns.tolist()}")
 
-        print(f"Successfully processed {self.csv_file_path}. Shape: {df.shape}")
+        # print(f"Successfully processed {self.csv_file_path}. Shape: {df.shape}. Input Dim: {self.INPUT_DIM}") # Less verbose
         return df[self.FEATURE_NAMES + [self.target_name]] # Select only needed columns
 
     def _create_sequences(self) -> Tuple[torch.Tensor, torch.Tensor]:

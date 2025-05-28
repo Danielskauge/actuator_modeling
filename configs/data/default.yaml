@@ -13,8 +13,8 @@ dataset_configs:
   # - {csv_file_path: "actual_data/trial1_massA.csv", inertia: 0.0123}
   # - {csv_file_path: "actual_data/trial2_massB.csv", inertia: 0.0234}
 
-# `features_to_use` is no longer needed here as ActuatorDataset defines its 5 features internally.
-# The input_dim for the model is fixed at 5 by ActuatorDataset.
+# `features_to_use` is no longer needed here as ActuatorDataset defines its input features internally.
+# The input_dim for the model is dynamically determined by ActuatorDataset.get_input_dim()
 
 target_name: 'tau_measured'
 gyro_axis_for_ang_vel: 'Gyro_Z' # 'Gyro_X', 'Gyro_Y', 'Gyro_Z', or null (not recommended)
@@ -23,10 +23,15 @@ accel_axis_for_torque: 'Acc_Y'  # Tangential accelerometer axis used by Actuator
 # --- DataModule Parameters ---
 batch_size: 32
 num_workers: 4 # Set to 0 for debugging
+seed: ${seed} # Inherit global seed for reproducible splits in datamodule
 
-# --- Physical Parameters for ActuatorDataset are REMOVED from here ---
-# k_spring_val, theta0_val, kp_phys_val, kd_phys_val are no longer needed by ActuatorDataModule or ActuatorDataset.
-# The ActuatorModel itself will use these from its own config (configs/model/default.yaml) if use_residual=True.
+# --- Global Split Ratios (used if evaluation_mode: global) ---
+global_train_ratio: 0.7
+global_val_ratio: 0.15
+# global_test_ratio is inferred as 1.0 - global_train_ratio - global_val_ratio (0.15)
+
+# --- Fallback for Data Sampling Frequency ---
+fallback_sampling_frequency: 100.0 # Hz. Used if ActuatorDataModule cannot determine from loaded datasets.
 
 # --- System Geometry (passed to ActuatorDataset) ---
 radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.
