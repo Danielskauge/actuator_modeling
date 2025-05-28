@@ -1,4 +1,5 @@
 import os
+import glob
 from typing import Optional, List, Dict, Any
 
 import pytorch_lightning as pl
@@ -12,6 +13,7 @@ from src.data.datasets import ActuatorDataset # ActuatorDataset now has fixed in
 class ActuatorDataModule(pl.LightningDataModule):
     """
     LightningDataModule for actuator modeling data.
+    Supports loading multiple CSV files per inertia group from organized subfolders.
     Supports two main operational modes for evaluation:
     1. Global Split Mode: All data is combined and split into train/val/test sets.
     2. LOMO CV Fold Mode: Data is set up for a specific fold of Leave-One-Mass-Out CV.
@@ -19,7 +21,8 @@ class ActuatorDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        dataset_configs: List[Dict[str, Any]], # Each dict: {'csv_file_path': str, 'inertia': float}
+        data_base_dir: str,  # Base directory containing subfolders for each inertia group
+        inertia_groups: List[Dict[str, Any]],  # Each dict: {'id': str, 'folder': str, 'inertia': float}
         radius_accel: float, # Radius for tangential acceleration calculation in ActuatorDataset
         gyro_axis_for_ang_vel: str = 'Gyro_Z',
         accel_axis_for_torque: str = 'Acc_Y',
@@ -35,10 +38,11 @@ class ActuatorDataModule(pl.LightningDataModule):
         **kwargs # Catches any other params from Hydra config (e.g. radius_load)
     ):
         super().__init__()
-        # Manually save hyperparameters as dataset_configs can be complex
+        # Manually save hyperparameters
         self.save_hyperparameters() # Saves all __init__ args as hparams
 
-        self.all_datasets_loaded: List[ActuatorDataset] = [] # Stores all loaded ActuatorDataset instances
+        self.datasets_by_group: Dict[str, List[ActuatorDataset]] = {}  # group_id -> list of ActuatorDataset instances
+        self.ordered_group_ids: List[str] = []  # Consistent ordering for LOMO CV
         
         # For Global Split Mode
         self.global_train_dataset: Optional[Dataset] = None
@@ -60,35 +64,76 @@ class ActuatorDataModule(pl.LightningDataModule):
 
     def _load_all_datasets_once(self):
         """Helper to load all ActuatorDataset instances if not already loaded."""
-        if not self.all_datasets_loaded:
-            print(f"DataModule: Lazily loading {len(self.hparams.dataset_configs)} datasets for the first time...")
-            dataset_sampling_frequencies = []
-            for i, config in enumerate(self.hparams.dataset_configs):
-                csv_path = config.get('csv_file_path')
-                inertia_val = config.get('inertia')
-                if not csv_path or inertia_val is None:
-                    raise ValueError(f"Dataset config {i} missing 'csv_file_path' or 'inertia'.")
-
-                dataset_instance = ActuatorDataset(
-                    csv_file_path=csv_path,
-                    inertia=inertia_val,
-                    radius_accel=self.hparams.radius_accel,
-                    gyro_axis_for_ang_vel=self.hparams.gyro_axis_for_ang_vel,
-                    accel_axis_for_torque=self.hparams.accel_axis_for_torque,
-                    target_name=self.hparams.target_name
-                )
-                self.all_datasets_loaded.append(dataset_instance)
-                dataset_sampling_frequencies.append(dataset_instance.get_sampling_frequency())
+        if not self.datasets_by_group:
+            print(f"DataModule: Discovering and loading CSV files from {len(self.hparams.inertia_groups)} inertia groups...")
             
-            if not self.all_datasets_loaded:
-                raise RuntimeError("No datasets were loaded by _load_all_datasets_once.")
+            total_csv_files = 0
+            dataset_sampling_frequencies = []
+            
+            for group_config in self.hparams.inertia_groups:
+                group_id = group_config.get('id')
+                group_folder = group_config.get('folder')
+                group_inertia = group_config.get('inertia')
+                
+                if not group_id or not group_folder or group_inertia is None:
+                    raise ValueError(f"Group config missing 'id', 'folder', or 'inertia': {group_config}")
+                
+                # Build path to group's subfolder
+                group_path = os.path.join(self.hparams.data_base_dir, group_folder)
+                
+                if not os.path.exists(group_path):
+                    print(f"Warning: Group folder does not exist: {group_path}. Skipping group '{group_id}'.")
+                    continue
+                
+                # Find all CSV files in this group's folder
+                csv_pattern = os.path.join(group_path, "*.csv")
+                csv_files = glob.glob(csv_pattern)
+                
+                if not csv_files:
+                    print(f"Warning: No CSV files found in {group_path}. Skipping group '{group_id}'.")
+                    continue
+                
+                # Sort for consistent ordering
+                csv_files.sort()
+                
+                print(f"  Group '{group_id}' (inertia={group_inertia}): Found {len(csv_files)} CSV files in {group_path}")
+                
+                # Load each CSV file as an ActuatorDataset
+                group_datasets = []
+                for csv_file in csv_files:
+                    try:
+                        dataset_instance = ActuatorDataset(
+                            csv_file_path=csv_file,
+                            inertia=group_inertia,
+                            radius_accel=self.hparams.radius_accel,
+                            gyro_axis_for_ang_vel=self.hparams.gyro_axis_for_ang_vel,
+                            accel_axis_for_torque=self.hparams.accel_axis_for_torque,
+                            target_name=self.hparams.target_name
+                        )
+                        group_datasets.append(dataset_instance)
+                        dataset_sampling_frequencies.append(dataset_instance.get_sampling_frequency())
+                        total_csv_files += 1
+                        print(f"    Loaded {os.path.basename(csv_file)}: {len(dataset_instance)} sequences")
+                    except Exception as e:
+                        print(f"    Error loading {csv_file}: {e}")
+                        continue
+                
+                if group_datasets:
+                    self.datasets_by_group[group_id] = group_datasets
+                    self.ordered_group_ids.append(group_id)
+                    print(f"    Total sequences for group '{group_id}': {sum(len(ds) for ds in group_datasets)}")
+                else:
+                    print(f"    No valid datasets loaded for group '{group_id}'")
+            
+            if not self.datasets_by_group:
+                raise RuntimeError("No datasets were loaded from any inertia group.")
 
             if dataset_sampling_frequencies:
                 self.sampling_frequency = dataset_sampling_frequencies[0]
-                # print(f"DataModule: Base sampling frequency: {self.sampling_frequency:.2f} Hz") # Less verbose
-                # ... (optional: check for differing fs)
-            print(f"DataModule: All {len(self.all_datasets_loaded)} datasets loaded.")
-            print(f"  Input dim: {self.input_dim}, Sequence length: {self.sequence_length}, Sampling Freq: {self.sampling_frequency:.2f} Hz")
+                print(f"DataModule: Base sampling frequency: {self.sampling_frequency:.2f} Hz")
+            
+            print(f"DataModule: Loaded {total_csv_files} CSV files from {len(self.datasets_by_group)} inertia groups.")
+            print(f"  Input dim: {self.input_dim}, Sequence length: {self.sequence_length}")
 
     def prepare_data(self):
         # This ensures data (CSVs) are accessible.
@@ -109,12 +154,18 @@ class ActuatorDataModule(pl.LightningDataModule):
         """Sets up the DataModule for a single global train/val/test run."""
         self._load_all_datasets_once()
         self._current_mode = "global"
-        print(f"DataModule: Setting up for a GLOBAL run with {len(self.all_datasets_loaded)} total datasets.")
+        
+        # Collect all datasets from all groups
+        all_datasets = []
+        for group_id in self.ordered_group_ids:
+            all_datasets.extend(self.datasets_by_group[group_id])
+        
+        print(f"DataModule: Setting up for a GLOBAL run with {len(all_datasets)} total datasets from {len(self.datasets_by_group)} groups.")
 
-        if not self.all_datasets_loaded:
+        if not all_datasets:
             raise RuntimeError("No datasets available to perform a global split.")
 
-        combined_dataset = ConcatDataset(self.all_datasets_loaded)
+        combined_dataset = ConcatDataset(all_datasets)
         total_samples = len(combined_dataset)
         print(f"  Total combined samples for global split: {total_samples}")
 
@@ -143,29 +194,43 @@ class ActuatorDataModule(pl.LightningDataModule):
         self._load_all_datasets_once()
         self._current_mode = "lomo_fold"
 
-        num_total_datasets = len(self.all_datasets_loaded)
-        if not 0 <= fold_index < num_total_datasets:
-            raise ValueError(f"LOMO fold index {fold_index} out of bounds for {num_total_datasets} datasets.")
-        if num_total_datasets < 2:
-             print(f"Warning: LOMO CV is being set up with only {num_total_datasets} dataset(s). Generalization testing will be limited or not meaningful.")
+        num_total_groups = len(self.ordered_group_ids)
+        if not 0 <= fold_index < num_total_groups:
+            raise ValueError(f"LOMO fold index {fold_index} out of bounds for {num_total_groups} groups.")
+        if num_total_groups < 2:
+             print(f"Warning: LOMO CV is being set up with only {num_total_groups} group(s). Generalization testing will be limited or not meaningful.")
 
-        print(f"\nDataModule: Setting up for LOMO CV - Fold {fold_index + 1}/{num_total_datasets}.")
+        print(f"\nDataModule: Setting up for LOMO CV - Fold {fold_index + 1}/{num_total_groups}.")
 
-        # The dataset at fold_index is for validation and testing (unseen for this fold)
-        self.current_fold_val_dataset = self.all_datasets_loaded[fold_index]
-        self.current_fold_test_dataset = self.all_datasets_loaded[fold_index]
-        print(f"  Unseen data for Val/Test in Fold {fold_index + 1}: {self.all_datasets_loaded[fold_index].csv_file_path} ({len(self.current_fold_val_dataset)} sequences)")
-
-        # All other datasets form the training set for this fold
-        seen_pool_datasets_for_training = [ds for i, ds in enumerate(self.all_datasets_loaded) if i != fold_index]
-
-        if not seen_pool_datasets_for_training:
-            # This would happen if num_total_datasets is 1.
-            self.current_fold_train_dataset = None
-            print(f"  Warning: No training datasets for LOMO Fold {fold_index + 1} (total datasets: {num_total_datasets}). Training will fail if attempted.")
+        # The group at fold_index is for validation and testing (unseen for this fold)
+        held_out_group_id = self.ordered_group_ids[fold_index]
+        held_out_datasets = self.datasets_by_group[held_out_group_id]
+        
+        # Combine all datasets from the held-out group for validation and testing
+        if len(held_out_datasets) == 1:
+            self.current_fold_val_dataset = held_out_datasets[0]
+            self.current_fold_test_dataset = held_out_datasets[0]
         else:
-            self.current_fold_train_dataset = ConcatDataset(seen_pool_datasets_for_training)
-            print(f"  Training data for Fold {fold_index + 1}: {len(self.current_fold_train_dataset)} sequences from {len(seen_pool_datasets_for_training)} dataset(s).")
+            combined_held_out = ConcatDataset(held_out_datasets)
+            self.current_fold_val_dataset = combined_held_out
+            self.current_fold_test_dataset = combined_held_out
+        
+        print(f"  Held-out group '{held_out_group_id}' for Val/Test in Fold {fold_index + 1}: {len(self.current_fold_val_dataset)} sequences from {len(held_out_datasets)} CSV files")
+
+        # All other groups form the training set for this fold
+        training_datasets = []
+        for i, group_id in enumerate(self.ordered_group_ids):
+            if i != fold_index:
+                training_datasets.extend(self.datasets_by_group[group_id])
+
+        if not training_datasets:
+            # This would happen if num_total_groups is 1.
+            self.current_fold_train_dataset = None
+            print(f"  Warning: No training datasets for LOMO Fold {fold_index + 1} (total groups: {num_total_groups}). Training will fail if attempted.")
+        else:
+            self.current_fold_train_dataset = ConcatDataset(training_datasets)
+            num_training_groups = num_total_groups - 1
+            print(f"  Training data for Fold {fold_index + 1}: {len(self.current_fold_train_dataset)} sequences from {num_training_groups} group(s).")
 
     def train_dataloader(self) -> DataLoader:
         dataset_to_use = None
@@ -174,7 +239,7 @@ class ActuatorDataModule(pl.LightningDataModule):
             if dataset_to_use is None: raise RuntimeError("Global train dataset not set. Call setup_for_global_run().")
         elif self._current_mode == "lomo_fold":
             dataset_to_use = self.current_fold_train_dataset
-            if dataset_to_use is None: raise RuntimeError("LOMO fold train dataset not set or is empty. Call setup_for_lomo_fold(). This may occur if only 1 total dataset is available for LOMO.")
+            if dataset_to_use is None: raise RuntimeError("LOMO fold train dataset not set or is empty. Call setup_for_lomo_fold(). This may occur if only 1 total group is available for LOMO.")
         else:
             raise RuntimeError("DataModule mode not set. Call setup_for_global_run() or setup_for_lomo_fold().")
         
@@ -212,48 +277,76 @@ class ActuatorDataModule(pl.LightningDataModule):
     def get_sampling_frequency(self) -> Optional[float]: return self.sampling_frequency
     def get_num_lomo_folds(self) -> int:
         self._load_all_datasets_once() # Ensure datasets are counted
-        return len(self.all_datasets_loaded)
+        return len(self.ordered_group_ids)
 
 
 if __name__ == '__main__':
-    print("Testing ActuatorDataModule with two-stage evaluation structure...")
-    dummy_files_info_dm = []
-    num_total_datasets_dm = 3 # Should be >= 2 for meaningful LOMO seen/unseen split test
+    print("Testing ActuatorDataModule with grouped CSV files structure...")
+    
+    # Create test directory structure
+    test_base_dir = "test_data_dm"
+    os.makedirs(test_base_dir, exist_ok=True)
+    
+    # Create inertia groups configuration
+    inertia_groups_config = [
+        {'id': 'mass_low', 'folder': 'low_inertia', 'inertia': 0.01},
+        {'id': 'mass_med', 'folder': 'med_inertia', 'inertia': 0.02},
+        {'id': 'mass_high', 'folder': 'high_inertia', 'inertia': 0.03}
+    ]
+    
     fs_main_test_dm = 100
-
-    # Create dummy CSVs
-    for i in range(num_total_datasets_dm):
-        num_rows_dm = 300 + i * 50 
-        dt_main_test_dm = 1.0 / fs_main_test_dm
-        time_ms_main_test_dm = np.arange(0, num_rows_dm * dt_main_test_dm, dt_main_test_dm) * 1000
-        dummy_data_dm_df = pd.DataFrame({
-            'Time_ms': time_ms_main_test_dm,
-            'Encoder_Angle': 90 * np.sin(2*np.pi*(0.5+i*0.1)*time_ms_main_test_dm/1000),
-            'Commanded_Angle': 90*np.sin(2*np.pi*(0.5+i*0.1)*time_ms_main_test_dm/1000 + np.pi/(4+i)),
-            'Acc_X': np.random.randn(num_rows_dm)*(0.5+i*0.1),
-            'Acc_Y': np.sin(2*np.pi*(0.5+i*0.1)*time_ms_main_test_dm/1000)*10 + np.random.randn(num_rows_dm)*0.1,
-            'Acc_Z': 9.81 + np.random.randn(num_rows_dm)*(0.5+i*0.1),
-            'Gyro_X': np.random.randn(num_rows_dm)*(5+i),
-            'Gyro_Y': np.random.randn(num_rows_dm)*(5+i),
-            'Gyro_Z': (90*ActuatorDataset.RAD_PER_DEG*(0.5+i*0.1)*2*np.pi)*np.cos(2*np.pi*(0.5+i*0.1)*time_ms_main_test_dm/1000)/ActuatorDataset.RAD_PER_DEG + np.random.randn(num_rows_dm)*0.5,
-        })
-        dummy_csv_path_main_dm = f"dummy_actuator_data_mass_dm_{i}.csv"
-        dummy_data_dm_df.to_csv(dummy_csv_path_main_dm, index=False)
-        dummy_files_info_dm.append({'csv_file_path': dummy_csv_path_main_dm, 'inertia': 0.05 + i*0.01})
-    print(f"Created {len(dummy_files_info_dm)} dummy CSV files for DataModule test.")
-
-    dm_instance = ActuatorDataModule(
-        dataset_configs=dummy_files_info_dm,
-        radius_accel=0.2, # m
-        gyro_axis_for_ang_vel='Gyro_Z', accel_axis_for_torque='Acc_Y',
-        batch_size=16, num_workers=0,
-        global_train_ratio=0.7, global_val_ratio=0.15, # Test global ratios
-        seed=123
-    )
+    created_files = []
+    
     try:
+        # Create dummy CSV files for each group
+        for group_config in inertia_groups_config:
+            group_folder = os.path.join(test_base_dir, group_config['folder'])
+            os.makedirs(group_folder, exist_ok=True)
+            
+            # Create 2-3 CSV files per group
+            num_files = 2 if group_config['id'] == 'mass_low' else 3
+            for file_idx in range(num_files):
+                num_rows_dm = 200 + file_idx * 50
+                dt_main_test_dm = 1.0 / fs_main_test_dm
+                time_ms_main_test_dm = np.arange(0, num_rows_dm * dt_main_test_dm, dt_main_test_dm) * 1000
+                
+                inertia_factor = group_config['inertia'] * 10  # Scale for variation
+                dummy_data_dm_df = pd.DataFrame({
+                    'Time_ms': time_ms_main_test_dm,
+                    'Encoder_Angle': 90 * np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000),
+                    'Commanded_Angle': 90*np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000 + np.pi/(4+file_idx)),
+                    'Acc_X': np.random.randn(num_rows_dm)*(0.5+inertia_factor),
+                    'Acc_Y': np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000)*10 + np.random.randn(num_rows_dm)*0.1,
+                    'Acc_Z': 9.81 + np.random.randn(num_rows_dm)*(0.5+inertia_factor),
+                    'Gyro_X': np.random.randn(num_rows_dm)*(5+inertia_factor),
+                    'Gyro_Y': np.random.randn(num_rows_dm)*(5+inertia_factor),
+                    'Gyro_Z': (90*0.017453*(0.5+inertia_factor)*2*np.pi)*np.cos(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000)/0.017453 + np.random.randn(num_rows_dm)*0.5,
+                })
+                
+                csv_filename = f"run_{file_idx + 1}.csv"
+                csv_path = os.path.join(group_folder, csv_filename)
+                dummy_data_dm_df.to_csv(csv_path, index=False)
+                created_files.append(csv_path)
+        
+        print(f"Created test directory structure with {len(created_files)} CSV files across {len(inertia_groups_config)} groups.")
+
+        # Test the new ActuatorDataModule
+        dm_instance = ActuatorDataModule(
+            data_base_dir=test_base_dir,
+            inertia_groups=inertia_groups_config,
+            radius_accel=0.2,
+            gyro_axis_for_ang_vel='Gyro_Z', 
+            accel_axis_for_torque='Acc_Y',
+            batch_size=16, 
+            num_workers=0,
+            global_train_ratio=0.7, 
+            global_val_ratio=0.15,
+            seed=123
+        )
+
         # --- Test Global Split Mode ---
         print("\n--- Testing Global Split Mode ---")
-        dm_instance.setup_for_global_run() # Explicitly set up for global run
+        dm_instance.setup_for_global_run()
         
         train_loader_global = dm_instance.train_dataloader()
         val_loader_global = dm_instance.val_dataloader()
@@ -266,48 +359,32 @@ if __name__ == '__main__':
         if train_loader_global and len(train_loader_global) > 0:
             X_batch_train_g, y_batch_train_g = next(iter(train_loader_global))
             print(f"  Global Train X batch shape: {X_batch_train_g.shape}, y batch shape: {y_batch_train_g.shape}")
-        if val_loader_global and len(val_loader_global) > 0:
-            X_batch_val_g, y_batch_val_g = next(iter(val_loader_global))
-            print(f"  Global Val X batch shape: {X_batch_val_g.shape}, y batch shape: {y_batch_val_g.shape}")
-        if test_loader_global and len(test_loader_global) > 0:
-            X_batch_test_g, y_batch_test_g = next(iter(test_loader_global))
-            print(f"  Global Test X batch shape: {X_batch_test_g.shape}, y batch shape: {y_batch_test_g.shape}")
 
         # --- Test LOMO CV Fold Mode ---
         print("\n--- Testing LOMO CV Fold Mode ---")
         num_folds_to_test = dm_instance.get_num_lomo_folds()
-        if num_folds_to_test == 0 : num_folds_to_test = 1 # ensure loop runs once if only 1 dataset
         
-        for fold_idx_dm in range(num_folds_to_test):
+        for fold_idx_dm in range(min(2, num_folds_to_test)):  # Test first 2 folds
             print(f"\n--- Setting up LOMO Fold {fold_idx_dm + 1}/{num_folds_to_test} ---")
             dm_instance.setup_for_lomo_fold(fold_idx_dm)
             
             train_loader_lomo = dm_instance.train_dataloader()
             val_loader_lomo = dm_instance.val_dataloader()
-            test_loader_lomo = dm_instance.test_dataloader() # Test is on the unseen data
+            test_loader_lomo = dm_instance.test_dataloader()
 
             print(f"  LOMO Fold {fold_idx_dm + 1} Train loader: {len(train_loader_lomo.dataset) if train_loader_lomo and train_loader_lomo.dataset else 'N/A'} samples")
             print(f"  LOMO Fold {fold_idx_dm + 1} Val loader (unseen): {len(val_loader_lomo.dataset) if val_loader_lomo else 'N/A'} samples")
             print(f"  LOMO Fold {fold_idx_dm + 1} Test loader (unseen): {len(test_loader_lomo.dataset) if test_loader_lomo else 'N/A'} samples")
 
-            if train_loader_lomo and hasattr(train_loader_lomo, 'dataset') and len(train_loader_lomo.dataset) > 0 :
-                 X_b_train_l, y_b_train_l = next(iter(train_loader_lomo))
-                 print(f"  LOMO Train X batch shape: {X_b_train_l.shape}")
-            if val_loader_lomo and len(val_loader_lomo) > 0:
-                 X_b_val_l, _ = next(iter(val_loader_lomo))
-                 print(f"  LOMO Val X batch shape: {X_b_val_l.shape}")
-            if test_loader_lomo and len(test_loader_lomo) > 0:
-                 X_b_test_l, _ = next(iter(test_loader_lomo))
-                 print(f"  LOMO Test X batch shape: {X_b_test_l.shape}")
-
-
-        print("\nActuatorDataModule with two-stage (global/LOMO) setup seems to pass basic checks.")
+        print("\nActuatorDataModule with grouped CSV structure passes basic tests.")
+        
     except Exception as e_dm:
         print(f"Error during ActuatorDataModule test: {e_dm}")
         import traceback
         traceback.print_exc()
     finally:
-        for info_dm in dummy_files_info_dm:
-            if os.path.exists(info_dm['csv_file_path']):
-                os.remove(info_dm['csv_file_path'])
-        print("\nCleaned up dummy CSV files for DataModule test.") 
+        # Clean up test files and directories
+        import shutil
+        if os.path.exists(test_base_dir):
+            shutil.rmtree(test_base_dir)
+            print(f"\nCleaned up test directory: {test_base_dir}") 

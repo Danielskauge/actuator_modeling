@@ -1,0 +1,1 @@
+{"avg_test_mse_epoch":0.003618201861778895,"_wandb":{"runtime":0},"_runtime":0.684346447,"avg_test_mae_epoch":0.04750757416089376,"_timestamp":1.748437882578015e+09,"avg_test_r2_epoch":0.7166750431060791,"_step":0,"avg_test_rmse_epoch":0.06010329599181811,"avg_test_loss":0.00427898159250617}

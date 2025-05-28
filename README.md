@@ -52,10 +52,14 @@ The project aims to predict the torque applied by an actuator based on its state
 
 *   **`src/data/datamodule.py:ActuatorDataModule`**:
     *   A PyTorch Lightning `LightningDataModule` that orchestrates the use of `ActuatorDataset`.
-    *   Manages multiple `ActuatorDataset` instances, one for each CSV/inertia defined in the configuration.
+    *   Supports loading multiple CSV files per inertia group from organized subfolders. Each inertia group is defined by:
+        *   `id`: A unique identifier for the group
+        *   `folder`: The subfolder name under the base data directory
+        *   `inertia`: The numerical inertia value for all CSV files in this group
+    *   Automatically discovers and loads all `*.csv` files within each group's subfolder.
     *   Supports two primary setup modes for evaluation (controlled by the main training script via `cfg.evaluation_mode`):
-        1.  **Global Run Mode (`setup_for_global_run`)**: Combines all individual datasets and performs a single train/validation/test split on this aggregated data. This is used to assess overall model learning capability.
-        2.  **LOMO CV Fold Mode (`setup_for_lomo_fold`)**: Sets up data for a specific fold in Leave-One-Mass-Out Cross-Validation. In each fold, one dataset (mass) is held out as the validation and test set (unseen inertia), while the remaining datasets are used for training. This rigorously tests generalization to new inertias.
+        1.  **Global Run Mode (`setup_for_global_run`)**: Combines all individual datasets from all groups and performs a single train/validation/test split on this aggregated data. This is used to assess overall model learning capability.
+        2.  **LOMO CV Fold Mode (`setup_for_lomo_fold`)**: Sets up data for a specific fold in Leave-One-Mass-Out Cross-Validation. In each fold, one entire inertia group (all CSV files for that inertia) is held out as the validation and test set (unseen inertia), while datasets from all other groups are used for training. This rigorously tests generalization to new inertias.
     *   Provides the necessary `train_dataloader()`, `val_dataloader()`, and `test_dataloader()` based on the active mode.
 
 ### Model Architectures
@@ -89,7 +93,7 @@ The project aims to predict the torque applied by an actuator based on its state
 
 *   **Hydra (`configs/`)**:
     *   `configs/config.yaml`: Main configuration. Includes `evaluation_mode` to switch between global and LOMO CV runs.
-    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`. `input_dim` is now implicitly 3 due to `ActuatorDataset` changes. Includes `fallback_sampling_frequency` (though `ActuatorModel` no longer uses it directly).
+    *   `configs/data/default.yaml`: Configures `ActuatorDataModule` with the new grouped structure. Includes `data_base_dir` (base directory path) and `inertia_groups` (list of group configurations). `input_dim` is now implicitly 3 due to `ActuatorDataset` changes. Includes `fallback_sampling_frequency` (though `ActuatorModel` no longer uses it directly).
     *   `configs/model/default.yaml`: Configures `ActuatorModel`. `input_dim` is no longer set here but passed dynamically. `sampling_frequency` is not used.
     *   `configs/train/default.yaml`: Includes `callbacks` section to toggle common callbacks and settings for `gradient_clip_val` and `early_stopping.active`.
 
@@ -154,22 +158,40 @@ actuator_modeling/
 
 ### Data Preparation
 
-1.  **CSV Files**: Prepare your actuator data in CSV format. Each file should represent data from a specific experimental condition (e.g., a particular inertia).
+1.  **Directory Structure**: Organize your actuator data into a structured directory format where each inertia group has its own subfolder containing multiple CSV files:
+    ```
+    data/real/  # or your chosen base directory
+    ├── 0.01kgm2/           # Folder for first inertia group
+    │   ├── run_001.csv
+    │   ├── run_002.csv
+    │   ├── experiment_A.csv
+    │   └── ...
+    ├── 0.015kgm2/          # Folder for second inertia group
+    │   ├── trial_1.csv
+    │   ├── trial_2.csv
+    │   └── ...
+    └── 0.02kgm2/           # Folder for third inertia group
+        ├── test_alpha.csv
+        ├── test_beta.csv
+        └── ...
+    ```
+
+2.  **CSV File Format**: Each CSV file should represent data from a specific experimental run. All files within the same subfolder should correspond to the same inertia value.
     *   **Required columns for `ActuatorDataset`**:
         *   `Time_ms`: Timestamp in milliseconds.
         *   `Encoder_Angle`: Current angle of the actuator (degrees).
         *   `Commanded_Angle`: Desired/target angle of the actuator (degrees).
         *   `Acc_X`, `Acc_Y`, `Acc_Z`: Accelerometer readings (m/s²). The specific axis used for torque calculation (`accel_axis_for_torque`) is configured.
         *   `Gyro_X`, `Gyro_Y`, `Gyro_Z`: Gyroscope readings (deg/s). The specific axis used for angular velocity (`gyro_axis_for_ang_vel`) is configured.
-    *   Place these CSV files in a directory (e.g., `data/my_experiment_csvs/`).
 
-2.  **Configure `configs/data/default.yaml`**:
-    *   Update `dataset_configs` with a list of your CSV files and their corresponding `inertia` values. Example:
+3.  **Configure `configs/data/default.yaml`**:
+    *   Update `data_base_dir` to point to your base directory (e.g., `"data/real"`).
+    *   Update `inertia_groups` with your inertia group configurations. Example:
         ```yaml
-        dataset_configs:
-          - {csv_file_path: "data/my_experiment_csvs/run_inertia_A.csv", inertia: 0.01}
-          - {csv_file_path: "data/my_experiment_csvs/run_inertia_B.csv", inertia: 0.015}
-          # ... and so on for all your datasets
+        inertia_groups:
+          - {id: "mass_low", folder: "0.01kgm2", inertia: 0.01}
+          - {id: "mass_medium", folder: "0.015kgm2", inertia: 0.015}
+          - {id: "mass_high", folder: "0.02kgm2", inertia: 0.02}
         ```
     *   Set other relevant parameters like `radius_accel`, `gyro_axis_for_ang_vel`, `accel_axis_for_torque`.
     *   For "Global Evaluation Mode", configure `global_train_ratio` and `global_val_ratio`.
@@ -182,15 +204,15 @@ The `ActuatorDataModule` and the main training script (`scripts/train_model.py`)
 #### Global Evaluation Mode (`evaluation_mode=global`)
 
 *   **Purpose**: To assess the model's fundamental ability to learn the actuator dynamics from the entirety of the collected data. This is a good first step to ensure the model and features are viable.
-*   **Mechanism**: All datasets listed in `dataset_configs` are combined. This combined dataset is then split into training, validation, and test sets according to `global_train_ratio` and `global_val_ratio`.
+*   **Mechanism**: All datasets from all inertia groups are combined. This combined dataset is then split into training, validation, and test sets according to `global_train_ratio` and `global_val_ratio`.
 
 #### Leave-One-Mass-Out Cross-Validation (LOMO CV) Mode (`evaluation_mode=lomo_cv`)
 
 *   **Purpose**: To rigorously evaluate the model's ability to generalize to unseen inertias.
-*   **Mechanism**: The training script iterates through each dataset. In each iteration (fold):
-    *   One dataset (representing one inertia) is held out as the validation set and the test set for that fold.
-    *   The model is trained on all other N-1 datasets.
-    *   Performance metrics are collected for the held-out dataset.
+*   **Mechanism**: The training script iterates through each inertia group. In each iteration (fold):
+    *   One entire inertia group (all CSV files for that inertia) is held out as the validation set and the test set for that fold.
+    *   The model is trained on datasets from all other inertia groups.
+    *   Performance metrics are collected for the held-out inertia group.
     *   The final LOMO CV performance is typically the average of metrics across all folds.
 
 ### Running Training

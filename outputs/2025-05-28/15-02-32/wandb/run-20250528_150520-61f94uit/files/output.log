@@ -1,0 +1,55 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+Starting training for fold 2...
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Warning: Total training steps (inf) <= warmup steps (inf). Cosine decay might not behave as expected. Effective LR may be constant or only warmup.
+
+  | Name          | Type       | Params | Mode
+-----------------------------------------------------
+0 | model         | GRUModel   | 150 K  | train
+1 | train_metrics | ModuleDict | 0      | train
+2 | val_metrics   | ModuleDict | 0      | train
+3 | test_metrics  | ModuleDict | 0      | train
+-----------------------------------------------------
+150 K     Trainable params
+0         Non-trainable params
+150 K     Total params
+0.601     Total estimated model params size (MB)
+18        Modules in train mode
+0         Modules in eval mode
+Epoch 67: 100%|█| 125/125 [00:01<00:00, 68.25it/s, v_num=4uit, train_loss_step=0.00192, val_loss=0.00395, val_mse_epoch=0.00333, val_rmse_epoch=0.0577, val_mae_epoch=0.0449, val_r2_epoch=0.792, train_loss_epoch=0.00443, train_mse_epoch=
+Starting testing for fold 2...                                                                                                                                                                                                              
+Metric val_rmse_epoch improved. New best score: 0.077
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/lr_monitor.py:217: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.075
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.074
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.072
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.068
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.064
+Metric val_rmse_epoch improved by 0.003 >= min_delta = 0.0001. New best score: 0.061
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.059
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.059
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.058
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.058
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.057
+Monitored metric val_rmse_epoch did not improve in the last 20 records. Best score: 0.057. Signaling Trainer to stop.
+Restoring states from the checkpoint path at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/15-02-32/checkpoints/fold_2/gru-fold_2_debug-epoch=47-val_rmse_epoch=0.0570.ckpt
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Loaded model weights from the checkpoint at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/15-02-32/checkpoints/fold_2/gru-fold_2_debug-epoch=47-val_rmse_epoch=0.0570.ckpt
+Testing DataLoader 0: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 63/63 [00:00<00:00, 236.77it/s]
+Generating test set prediction plots...
+Logging plots to WandB...
+Plots logged.
+Testing DataLoader 0: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 63/63 [00:00<00:00, 109.55it/s]
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃[1m [0m[1m       Test metric       [0m[1m [0m┃[1m [0m[1m      DataLoader 0       [0m[1m [0m┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│[36m [0m[36m        test_loss        [0m[36m [0m│[35m [0m[35m  0.003878144547343254   [0m[35m [0m│
+│[36m [0m[36m     test_mae_epoch      [0m[36m [0m│[35m [0m[35m   0.04438908398151398   [0m[35m [0m│
+│[36m [0m[36m     test_mse_epoch      [0m[36m [0m│[35m [0m[35m  0.003243601880967617   [0m[35m [0m│
+│[36m [0m[36m      test_r2_epoch      [0m[36m [0m│[35m [0m[35m   0.7973418235778809    [0m[35m [0m│
+│[36m [0m[36m     test_rmse_epoch     [0m[36m [0m│[35m [0m[35m   0.05695262923836708   [0m[35m [0m│
+└───────────────────────────┴───────────────────────────┘
+Fold 2 Test Metrics: {'test_loss': 0.003878144547343254, 'test_mse_epoch': 0.003243601880967617, 'test_rmse_epoch': 0.05695262923836708, 'test_mae_epoch': 0.04438908398151398, 'test_r2_epoch': 0.7973418235778809}

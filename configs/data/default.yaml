@@ -1,16 +1,32 @@
 _target_: src.data.datamodule.ActuatorDataModule
 
-# List of configurations for each dataset (mass). Each item is a dict.
-# The training script for LOMO CV will iterate through these, using one for validation/test
-# and the rest for training in each fold.
-dataset_configs:
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_0.csv", inertia: 0.0100}
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_1.csv", inertia: 0.0150}
-  - {csv_file_path: "data/synthetic_raw/synthetic_actuator_data_mass_2.csv", inertia: 0.0200}
-  # !!! Populate this list with your actual 15 CSV file paths and their inertias !!!
-  # e.g.:
-  # - {csv_file_path: "actual_data/trial1_massA.csv", inertia: 0.0123}
-  # - {csv_file_path: "actual_data/trial2_massB.csv", inertia: 0.0234}
+# Base directory containing subfolders for each inertia group
+data_base_dir: "data/real"
+
+# List of inertia groups. Each group contains multiple CSV files in its own subfolder.
+# The training script for LOMO CV will iterate through these groups, using one group 
+# for validation/test and the rest for training in each fold.
+inertia_groups:
+  - {id: "mass_0_01", folder: "0.01kgm2", inertia: 0.0100}
+  - {id: "mass_0_015", folder: "0.015kgm2", inertia: 0.0150}
+  - {id: "mass_0_02", folder: "0.02kgm2", inertia: 0.0200}
+  # Add more groups as needed:
+  # - {id: "mass_0_025", folder: "0.025kgm2", inertia: 0.0250}
+  # - {id: "mass_0_03", folder: "0.03kgm2", inertia: 0.0300}
+
+# Directory structure should be:
+# data/real/
+#   ├── 0.01kgm2/
+#   │   ├── run_1.csv
+#   │   ├── run_2.csv
+#   │   └── ...
+#   ├── 0.015kgm2/
+#   │   ├── trial_A.csv
+#   │   ├── trial_B.csv
+#   │   └── ...
+#   └── 0.02kgm2/
+#       ├── experiment_01.csv
+#       └── ...
 
 # `features_to_use` is no longer needed here as ActuatorDataset defines its input features internally.
 # The input_dim for the model is dynamically determined by ActuatorDataset.get_input_dim()

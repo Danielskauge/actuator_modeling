@@ -1,0 +1,68 @@
+[34m[1mwandb[0m: logging graph, to disable use `wandb.watch(log_graph=False)`
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+HPU available: False, using: 0 HPUs
+Starting training for fold 3...
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Warning: Total training steps (inf) <= warmup steps (inf). Cosine decay might not behave as expected. Effective LR may be constant or only warmup.
+
+  | Name          | Type       | Params | Mode
+-----------------------------------------------------
+0 | model         | GRUModel   | 150 K  | train
+1 | train_metrics | ModuleDict | 0      | train
+2 | val_metrics   | ModuleDict | 0      | train
+3 | test_metrics  | ModuleDict | 0      | train
+-----------------------------------------------------
+150 K     Trainable params
+0         Non-trainable params
+150 K     Total params
+0.601     Total estimated model params size (MB)
+18        Modules in train mode
+0         Modules in eval mode
+Epoch 123: 100%|█| 125/125 [00:01<00:00, 64.18it/s, v_num=b5ad, train_loss_step=0.00344, val_loss=0.00486, val_mse_epoch=0.00428, val_rmse_epoch=0.0654, val_mae_epoch=0.0519, val_r2_epoch=0.881, train_loss_epoch=0.00396, train_mse_epoch
+Starting testing for fold 3...                                                                                                                                                                                                              
+Metric val_rmse_epoch improved. New best score: 0.136
+/home/daniel/miniconda3/lib/python3.12/site-packages/pytorch_lightning/callbacks/lr_monitor.py:217: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.135
+Metric val_rmse_epoch improved by 0.005 >= min_delta = 0.0001. New best score: 0.130
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.130
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.129
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.128
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.126
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.124
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.123
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.121
+Metric val_rmse_epoch improved by 0.007 >= min_delta = 0.0001. New best score: 0.114
+Metric val_rmse_epoch improved by 0.002 >= min_delta = 0.0001. New best score: 0.113
+Metric val_rmse_epoch improved by 0.008 >= min_delta = 0.0001. New best score: 0.104
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.100
+Metric val_rmse_epoch improved by 0.005 >= min_delta = 0.0001. New best score: 0.095
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.094
+Metric val_rmse_epoch improved by 0.007 >= min_delta = 0.0001. New best score: 0.086
+Metric val_rmse_epoch improved by 0.000 >= min_delta = 0.0001. New best score: 0.086
+Metric val_rmse_epoch improved by 0.003 >= min_delta = 0.0001. New best score: 0.083
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.078
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.074
+Metric val_rmse_epoch improved by 0.004 >= min_delta = 0.0001. New best score: 0.071
+Metric val_rmse_epoch improved by 0.003 >= min_delta = 0.0001. New best score: 0.068
+Metric val_rmse_epoch improved by 0.001 >= min_delta = 0.0001. New best score: 0.067
+Metric val_rmse_epoch improved by 0.005 >= min_delta = 0.0001. New best score: 0.063
+Monitored metric val_rmse_epoch did not improve in the last 20 records. Best score: 0.063. Signaling Trainer to stop.
+Restoring states from the checkpoint path at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/15-02-32/checkpoints/fold_3/gru-fold_3_debug-epoch=103-val_rmse_epoch=0.0628.ckpt
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2]
+Loaded model weights from the checkpoint at /home/daniel/workspace/actuator_modeling/outputs/2025-05-28/15-02-32/checkpoints/fold_3/gru-fold_3_debug-epoch=103-val_rmse_epoch=0.0628.ckpt
+Testing DataLoader 0: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 63/63 [00:00<00:00, 248.66it/s]
+Generating test set prediction plots...
+Logging plots to WandB...
+Plots logged.
+Testing DataLoader 0: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 63/63 [00:00<00:00, 111.97it/s]
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃[1m [0m[1m       Test metric       [0m[1m [0m┃[1m [0m[1m      DataLoader 0       [0m[1m [0m┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│[36m [0m[36m        test_loss        [0m[36m [0m│[35m [0m[35m  0.004534904379397631   [0m[35m [0m│
+│[36m [0m[36m     test_mae_epoch      [0m[36m [0m│[35m [0m[35m  0.049953144043684006   [0m[35m [0m│
+│[36m [0m[36m     test_mse_epoch      [0m[36m [0m│[35m [0m[35m  0.003943342715501785   [0m[35m [0m│
+│[36m [0m[36m      test_r2_epoch      [0m[36m [0m│[35m [0m[35m   0.8906921148300171    [0m[35m [0m│
+│[36m [0m[36m     test_rmse_epoch     [0m[36m [0m│[35m [0m[35m   0.06279604136943817   [0m[35m [0m│
+└───────────────────────────┴───────────────────────────┘
+Fold 3 Test Metrics: {'test_loss': 0.004534904379397631, 'test_mse_epoch': 0.003943342715501785, 'test_rmse_epoch': 0.06279604136943817, 'test_mae_epoch': 0.049953144043684006, 'test_r2_epoch': 0.8906921148300171}
