@@ -107,7 +107,8 @@ def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val:
             'Gyro_Z': noisy_gyro_z_deg_s,
         })
         
-        current_angle_rad_actual += current_ang_vel_rad_s_actual * config.dt
+        # Update state using the actual (non-noisy) dynamics
+        current_angle_rad_actual += current_ang_vel_rad_s_actual * config.dt + 0.5 * current_ang_accel_rad_s2_actual * config.dt**2
         current_ang_vel_rad_s_actual += current_ang_accel_rad_s2_actual * config.dt
             
     df = pd.DataFrame(log)
