@@ -262,6 +262,28 @@ python scripts/train_model.py model.model_type=mlp # Ensure mlp specific params 
     *   Log files.
     *   Checkpoints saved by PyTorch Lightning (e.g., in a `checkpoints` subfolder).
 
+### Exporting Models to TorchScript (JIT)
+
+After training, the best model checkpoint can be automatically exported to a TorchScript (`.pt`) file. This JIT-compiled model is self-contained (includes normalization) and can be useful for deployment or optimized inference.
+
+*   **Configuration**: The export is controlled by the `train.export_jit_model` flag in your Hydra configuration.
+    *   Default: `false` (as set in `configs/train/default.yaml`).
+    *   To enable, set `train.export_jit_model=true` either in a config file or via command-line override.
+
+*   **Behavior**:
+    *   **Global Mode**: If enabled, the best model from the global run will be exported to the root of the Hydra run's output directory (e.g., `outputs/RUN_ID/model_name_best_jit.pt`).
+    *   **LOMO CV Mode**: If enabled, for each fold, the best model from that fold will be exported to a `jit_models` subfolder within that fold's checkpoint directory (e.g., `outputs/RUN_ID/checkpoints/fold_X/jit_models/model_name_fold_X_best_jit.pt`).
+    *   If WandB is active, the exported JIT model will also be logged as a WandB artifact.
+
+*   **Example CLI Override to Enable JIT Export**:
+    ```bash
+    # For a global run with JIT export
+    python scripts/train_model.py evaluation_mode=global train.export_jit_model=true
+
+    # For a LOMO CV run with JIT export for each fold
+    python scripts/train_model.py evaluation_mode=lomo_cv train.export_jit_model=true
+    ```
+
 ### Experiment Tracking
 
 *   The project is set up to integrate with Weights & Biases (WandB).

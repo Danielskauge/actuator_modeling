@@ -19,8 +19,9 @@ class SyntheticDataConfig:
     radius_for_acc_y: float = 0.2 # meters (distance from pivot to Acc_Y sensor, for Acc_Y generation)
     
     # PD Controller for generating behavior (these are the *true* underlying parameters)
-    kp_true: float = 6.0
+    kp_true: float = 10.0
     kd_true: float = 0.2
+    stall_torque_nm: float = 2.0
 
     # Parallel Spring for generating behavior (true underlying parameters)
     k_spring_true: float = 0.5 # Nm/rad
@@ -48,7 +49,7 @@ def get_target_trajectory(t: float, amp: float, freq: float) -> tuple[float, flo
 
 def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val: float, amp_traj: float, freq_traj: float) -> str:
     """Generates one CSV file of synthetic actuator data."""
-    print(f"Generating file {file_idx+1}: Inertia={inertia_val:.3f}, Amp={amp_traj:.2f}, Freq={freq_traj:.2f}")
+    print(f"Generating file {file_idx+1}: Inertia={inertia_val:.4f}, Amp={amp_traj:.2f}, Freq={freq_traj:.2f}")
 
     time_vec = np.arange(0, config.t_sim_per_file, config.dt)
     
@@ -67,18 +68,16 @@ def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val:
         # True spring force acting on the system
         true_spring_force = config.k_spring_true * (current_angle_rad_actual - config.theta0_spring_true)
         
-        # Ideal net torque from the controller side (PD command meant to counteract/overcome spring and drive motion)
-        # If the goal is for the PD to command the *net* torque, then it must account for the spring.
-        # Let's assume the PD calculates a desired torque, and the spring is an inherent part of the plant dynamics.
-        # So, the torque the motor *tries* to apply (from PD) is tau_pd_command_component.
-        # The actual net torque causing acceleration is this PD torque MINUS the spring force.
-        
         # Add noise to the PD commanded torque (simulating noise in the motor command itself)
         torque_noise_sample = np.random.normal(0, config.noise_torque_std)
         noisy_pd_command_component = tau_pd_command_component + torque_noise_sample
+
+        # Apply stall torque saturation
+        saturated_pd_command_component = np.clip(noisy_pd_command_component, -config.stall_torque_nm, config.stall_torque_nm)
         
         # Net torque causing acceleration of the inertia
-        net_torque_for_acceleration = noisy_pd_command_component - true_spring_force
+        # The motor attempts to apply saturated_pd_command_component. The spring resists this.
+        net_torque_for_acceleration = saturated_pd_command_component - true_spring_force
 
         current_ang_accel_rad_s2_actual = net_torque_for_acceleration / inertia_val
 
@@ -112,30 +111,67 @@ def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val:
         current_ang_vel_rad_s_actual += current_ang_accel_rad_s2_actual * config.dt
             
     df = pd.DataFrame(log)
+
+    # Create inertia-specific subdirectory
+    # Format inertia value for folder name, e.g., 0.01 -> "0.010kgm2"
+    inertia_folder_name = f"{inertia_val:.3f}kgm2" 
+    # Sanitize folder name if needed, though f-string format should be fine for typical values.
+    # Example: inertia_folder_name = inertia_folder_name.replace('.', '_') if issues arise.
+
+    group_output_dir = os.path.join(config.output_dir, inertia_folder_name)
+    os.makedirs(group_output_dir, exist_ok=True)
+
     output_filename = f"{config.base_filename}_{file_idx}.csv"
-    full_output_path = os.path.join(config.output_dir, output_filename)
+    full_output_path = os.path.join(group_output_dir, output_filename)
     df.to_csv(full_output_path, index=False, float_format='%.6f')
     return full_output_path
 
 def main():
     cfg = SyntheticDataConfig()
-    os.makedirs(cfg.output_dir, exist_ok=True)
+    # Top-level output directory (e.g., data/synthetic_raw) is created here,
+    # subdirs for each inertia will be created by generate_single_csv
+    os.makedirs(cfg.output_dir, exist_ok=True) 
     print(f"Generating synthetic data. Output directory: {cfg.output_dir}")
 
-    generated_files = []
+    generated_files_metadata = [] # Store dicts with path, inertia, and folder name
     for i in range(cfg.num_files_to_generate):
-        current_inertia = cfg.base_inertia * (1 + i * 0.5)
+        # Vary inertia for each file group.
+        # The script currently generates distinct files each with potentially different inertias.
+        # For the LOMO CV structure, each of these files will effectively become its own "group"
+        # unless multiple files are generated *for the same inertia* into the same folder.
+        # The current logic varies inertia per file, so each file gets its own inertia folder.
+        current_inertia = cfg.base_inertia * (1 + i * 0.5) # 0.01, 0.015, 0.02 for num_files=3
         current_amp = cfg.base_amp_target_rad * (1 - i * 0.1)
         current_freq = cfg.base_freq_target_hz * (1 + i * 0.2)
 
         file_path = generate_single_csv(cfg, i, current_inertia, current_amp, current_freq)
-        generated_files.append({"csv_file_path": file_path, "inertia": current_inertia})
+        
+        inertia_folder_name = f"{current_inertia:.3f}kgm2"
+        generated_files_metadata.append({
+            "csv_file_path": file_path, 
+            "inertia": current_inertia,
+            "folder": inertia_folder_name 
+        })
     
     print("\nSynthetic data generation complete.")
     print("Generated file configs (for data.dataset_configs in Hydra):")
-    for item in generated_files:
-        relative_path = os.path.relpath(item["csv_file_path"], start=os.getcwd())
-        print(f"  - {{csv_file_path: \"{relative_path}\", inertia: {item['inertia']:.4f}}}")
+    # Create a unique list of group configs for Hydra
+    # This assumes each generated file (with its unique inertia) forms a group
+    hydra_group_configs = []
+    seen_folders = set()
+    for item in generated_files_metadata:
+        if item["folder"] not in seen_folders:
+            # The relative path for csv_file_path in Hydra config is usually just the folder.
+            # The datamodule will then look for all CSVs in that folder.
+            # However, the current setup is one file per folder.
+            # For Hydra, we list the "groups" (folders)
+            hydra_group_configs.append(
+                f"  - {{id: \"inertia_{item['folder'].replace('kgm2','').replace('.','_')}\", folder: \"{item['folder']}\", inertia: {item['inertia']:.4f}}}"
+            )
+            seen_folders.add(item['folder'])
+            
+    for cfg_line in hydra_group_configs:
+        print(cfg_line)
 
 if __name__ == "__main__":
     main() 

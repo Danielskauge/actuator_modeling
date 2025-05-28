@@ -81,9 +81,10 @@ class ActuatorModel(pl.LightningModule):
             warmup_epochs: Number of epochs for learning rate warmup in cosine scheduler.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=["kwargs", "input_mean", "input_std", "target_mean", "target_std"])
+        # Save all relevant hyperparameters, including normalization stats
+        self.save_hyperparameters(ignore=["kwargs"]) 
 
-        # Register normalization stats as buffers
+        # Register normalization stats as buffers as well, for state_dict and device handling
         self.register_buffer("input_mean", input_mean)
         self.register_buffer("input_std", input_std)
         self.register_buffer("target_mean", target_mean)

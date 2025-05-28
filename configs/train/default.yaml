@@ -81,3 +81,5 @@ callbacks:
   learning_rate_monitor: true
   early_summary: false # Set to true to print model summary at start of training
   test_prediction_plotter: true # Set to true to plot test predictions at end of testing
+
+export_jit_model: false      # Optional: Set to true to export the model to TorchScript JIT after training

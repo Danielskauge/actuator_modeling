@@ -1,15 +1,18 @@
+# Data module configuration using Hydra structured configs (OmegaConf ListConfig)
+# Default values, can be overridden via command line or other config files
+
 _target_: src.data.datamodule.ActuatorDataModule
 
 # Base directory containing subfolders for each inertia group
 data_base_dir: "data/synthetic_raw"
 
-# List of inertia groups. Each group contains multiple CSV files in its own subfolder.
-# The training script for LOMO CV will iterate through these groups, using one group 
-# for validation/test and the rest for training in each fold.
+# List of inertia groups. Each group has an id, a subfolder name relative to data_base_dir,
+# and the inertia value (kg*m^2) for all CSVs in that subfolder.
+# The ActuatorDataModule will automatically discover all *.csv files in each 'folder'.
 inertia_groups:
-  - {id: "mass_0_01", folder: "0.01kgm2", inertia: 0.0100}
-  - {id: "mass_0_015", folder: "0.015kgm2", inertia: 0.0150}
-  - {id: "mass_0_02", folder: "0.02kgm2", inertia: 0.0200}
+  - {id: "inertia_0_010", folder: "0.010kgm2", inertia: 0.0100}
+  - {id: "inertia_0_015", folder: "0.015kgm2", inertia: 0.0150}
+  - {id: "inertia_0_020", folder: "0.020kgm2", inertia: 0.0200}
   # Add more groups as needed:
   # - {id: "mass_0_025", folder: "0.025kgm2", inertia: 0.0250}
   # - {id: "mass_0_03", folder: "0.03kgm2", inertia: 0.0300}
@@ -32,21 +35,28 @@ inertia_groups:
 # The input_dim for the model is dynamically determined by ActuatorDataset.get_input_dim()
 
 target_name: 'tau_measured'
-gyro_axis_for_ang_vel: 'Gyro_Z' # 'Gyro_X', 'Gyro_Y', 'Gyro_Z', or null (not recommended)
-accel_axis_for_torque: 'Acc_Y'  # Tangential accelerometer axis used by ActuatorDataset
+gyro_axis_for_ang_vel: 'Gyro_Z' # Gyroscope axis for signed angular velocity
+accel_axis_for_torque: 'Acc_Y'   # Accelerometer axis for tangential acceleration to calculate torque
 
-# --- DataModule Parameters ---
-batch_size: 32
-num_workers: 4 # Set to 0 for debugging
-seed: ${seed} # Inherit global seed for reproducible splits in datamodule
+# Sequence length for ActuatorDataset
+# The model input will be (sequence_length, num_features)
+# num_features is fixed at 3 by ActuatorDataset
+sequence_length: 2 # Default sequence length from ActuatorDataset
 
-# --- Global Split Ratios (used if evaluation_mode: global) ---
+# Parameters for data splitting in 'global' evaluation mode
+# These are used when all data is aggregated before splitting.
 global_train_ratio: 0.7
 global_val_ratio: 0.15
-# global_test_ratio is inferred as 1.0 - global_train_ratio - global_val_ratio (0.15)
+# Test ratio is implicitly (1 - global_train_ratio - global_val_ratio)
 
-# --- Fallback for Data Sampling Frequency ---
-fallback_sampling_frequency: 100.0 # Hz. Used if ActuatorDataModule cannot determine from loaded datasets.
+# Dataloader parameters
+batch_size: 256          # Batch size for training and evaluation
+num_workers: 4          # Number of worker processes for data loading
+
+# Fallback sampling frequency if it cannot be determined from the data's timestamps
+# ActuatorDataset attempts to calculate this, but uses this as a fallback.
+# Note: ActuatorModel itself no longer directly uses a sampling_frequency parameter.
+fallback_sampling_frequency: 100.0 # Hz, matches dt=0.01s from synthetic data
 
 # --- System Geometry (passed to ActuatorDataset) ---
 radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.

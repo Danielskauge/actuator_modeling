@@ -13,7 +13,50 @@ from src.data.datamodule import ActuatorDataModule
 from src.models.model import ActuatorModel
 from src.utils.callbacks import TestPredictionPlotter, EarlySummary # Assuming these exist and are compatible
 
-from typing import Tuple # For CustomEarlyStopping type hints
+from typing import Tuple, Optional # For CustomEarlyStopping type hints
+
+# Helper function for JIT export
+def _export_model_to_jit(
+    checkpoint_path: str,
+    model_class: type, # Should be ActuatorModel
+    jit_filename: str,
+    output_dir: str,
+    wandb_logger: Optional[WandbLogger] = None,
+    run_name_for_artifact: Optional[str] = None
+):
+    """Loads a model from a checkpoint, converts to TorchScript, saves, and logs to WandB."""
+    if not os.path.exists(checkpoint_path):
+        print(f"Checkpoint path not found: {checkpoint_path}. Skipping JIT export.")
+        return
+
+    print(f"\nExporting model from {checkpoint_path} to TorchScript (JIT)...")
+    try:
+        model_to_jit = model_class.load_from_checkpoint(checkpoint_path)
+        model_to_jit.eval() # Ensure model is in eval mode
+
+        jit_model_path = os.path.join(output_dir, jit_filename)
+        os.makedirs(os.path.dirname(jit_model_path), exist_ok=True) # Ensure dir exists
+
+        scripted_model = model_to_jit.to_torchscript(method="script")
+        torch.jit.save(scripted_model, jit_model_path)
+        print(f"Model successfully exported to TorchScript: {jit_model_path}")
+
+        if wandb_logger and run_name_for_artifact: # wandb_logger is passed, implying wandb is active for the trainer
+            if wandb.run is not None: # Check if there is an active wandb run
+                try:
+                    artifact_name = f"{run_name_for_artifact}_jit"
+                    # Use wandb.log_artifact directly
+                    artifact = wandb.Artifact(name=artifact_name, type="model")
+                    artifact.add_file(jit_model_path)
+                    wandb.log_artifact(artifact)
+                    print(f"JIT model logged as WandB artifact: {artifact_name}")
+                except Exception as e:
+                    print(f"Error logging JIT model to WandB: {e}")
+            else:
+                print("WandB run not active. Skipping artifact logging for JIT model.")
+
+    except Exception as e:
+        print(f"Error during JIT export for {checkpoint_path}: {e}")
 
 class CustomEarlyStopping(EarlyStopping):
     def __init__(self, stopping_threshold: float = None, monitor_op=None, **kwargs):
@@ -174,6 +217,21 @@ def train_actuator_model(cfg: DictConfig) -> None:
         if global_test_results:
             print(f"Global Test Metrics: {global_test_results[0]}")
             if wandb_logger_global: wandb_logger_global.log_metrics({"global_best_" + k: v for k,v in global_test_results[0].items()})
+        
+        # --- Export JIT model for global run ---
+        if cfg.train.get("export_jit_model", False):
+            if checkpoint_callback_global and checkpoint_callback_global.best_model_path:
+                _export_model_to_jit(
+                    checkpoint_path=checkpoint_callback_global.best_model_path,
+                    model_class=ActuatorModel,
+                    jit_filename=f"{run_name_global}_best_jit.pt",
+                    output_dir=cfg.outputs_dir, # Save in the root of the run's output dir
+                    wandb_logger=wandb_logger_global,
+                    run_name_for_artifact=run_name_global
+                )
+            else:
+                print("No best model checkpoint path available from callback for global run. Skipping JIT export.")
+
         if wandb_logger_global: wandb.finish()
 
     elif evaluation_mode == "lomo_cv":
@@ -272,6 +330,22 @@ def train_actuator_model(cfg: DictConfig) -> None:
                 print(f"Fold {fold_idx + 1} Test Metrics: {fold_test_results[0]}")
             else:
                 print(f"No test results returned for fold {fold_idx + 1}")
+
+            # --- Export JIT model for LOMO CV fold ---
+            if cfg.train.get("export_jit_model", False):
+                if checkpoint_callback_fold and checkpoint_callback_fold.best_model_path:
+                    # Save JIT model in a 'jit_models' subfolder within the fold's checkpoint directory
+                    fold_jit_output_dir = os.path.join(cfg.outputs_dir, "checkpoints", f"fold_{fold_idx + 1}", "jit_models")
+                    _export_model_to_jit(
+                        checkpoint_path=checkpoint_callback_fold.best_model_path,
+                        model_class=ActuatorModel,
+                        jit_filename=f"{run_name_fold}_best_jit.pt",
+                        output_dir=fold_jit_output_dir,
+                        wandb_logger=wandb_logger_fold,
+                        run_name_for_artifact=run_name_fold
+                    )
+                else:
+                    print(f"No best model checkpoint path available from callback for fold {fold_idx + 1}. Skipping JIT export.")
 
             if wandb_logger_fold: 
                 # Log per-fold metrics to the current wandb run for this fold
