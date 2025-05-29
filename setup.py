@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 setup(
     name="actuator_modeling",
     version="0.1.0",
-    description="MLP model for actuator torque prediction",
+    description="GRU model for actuator torque prediction",
     author="NTNU Robotics",
     author_email="your.email@ntnu.no",
     python_requires=">=3.8.0",
