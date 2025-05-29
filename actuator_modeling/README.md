@@ -3,6 +3,6 @@
     *   Converts angles from degrees to radians.
     *   Calculates current angular velocity from gyroscope data.
     *   Calculates the target `tau_measured` (measured torque) using the formula `inertia * angular_acceleration_from_tangential_accelerometer`.
-    *   **Applies a Savitzky-Golay filter to smooth the calculated `tau_measured` to reduce noise from accelerometer readings.**
+    *   **Applies a Savitzky-Golay filter to smooth the calculated `tau_measured`.** This filter is chosen because it's effective at reducing noise from accelerometer readings while preserving the shape and features of the underlying torque signal (e.g., peak heights and widths) better than simpler filters like a moving average. It achieves this by fitting a low-degree polynomial to successive windows of the data. The filter operates non-causally (using past, present, and future data points within its window), which is suitable for offline processing of training data as it generally provides better smoothing and less phase distortion.
     *   Extracts a fixed set of **3 input features** for the model: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`. The explicit `target_ang_vel_rad_s` feature has been removed, relying on the sequence of target angles to implicitly convey this information to the neural network.
 *   Shapes the data into sequences of a fixed length (`SEQUENCE_LENGTH = 2` by default) suitable for recurrent or time-aware models. The target torque corresponds to the state at the end of the sequence.
