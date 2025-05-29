@@ -253,6 +253,64 @@ After training, the best model checkpoint can be automatically exported to a Tor
 *   Configure WandB settings in `configs/config.yaml` (e.g., `wandb.project`, `wandb.entity`, `wandb.active`).
 *   PyTorch Lightning's `WandbLogger` will automatically log metrics, hyperparameters, and potentially model checkpoints.
 
+### Filter Effects Analysis
+
+A dedicated script (`scripts/analyze_filter_effects.py`) is provided to visualize the effects of the Butterworth filter on accelerometer data. This tool helps you understand how the filter impacts both the time-domain signals and their frequency content.
+
+#### Usage
+
+```bash
+# Use default filter settings from config
+python scripts/analyze_filter_effects.py
+
+# Override filter cutoff frequency
+python scripts/analyze_filter_effects.py data.filter_cutoff_freq_hz=30.0
+
+# Change filter order
+python scripts/analyze_filter_effects.py data.filter_cutoff_freq_hz=50.0 data.filter_order=6
+
+# Use a different data directory
+python scripts/analyze_filter_effects.py data.data_base_dir="path/to/your/data"
+
+# Disable filtering to see unfiltered data only
+python scripts/analyze_filter_effects.py data.filter_cutoff_freq_hz=null
+```
+
+#### Generated Analysis
+
+The script creates comprehensive plots for each processed CSV file showing:
+
+1. **Accelerometer Data Analysis**:
+   - **Timeseries comparison**: Raw vs. filtered accelerometer signals
+   - **Power Spectral Density (PSD)**: Frequency content before and after filtering
+   - **Difference plot**: What the filter removes from the signal
+
+2. **Derived Torque Analysis**:
+   - **Timeseries comparison**: Unfiltered vs. filtered torque calculations
+   - **PSD comparison**: Frequency content of the derived torque signals
+   - **Difference plot**: Impact of filtering on the final torque values
+
+3. **Quantitative Metrics**:
+   - RMS differences between filtered and unfiltered signals
+   - Visual indication of the filter cutoff frequency on PSD plots
+
+#### Output
+
+- Individual analysis plots saved to `filter_analysis_plots/`
+- Summary file (`analysis_summary.txt`) with configuration details
+- Each plot shows 6 subplots arranged in a 2×3 grid for comprehensive comparison
+
+#### Configuration
+
+Filter parameters are configured in `configs/data/default.yaml`:
+```yaml
+# Filter Parameters for ActuatorDataset
+filter_cutoff_freq_hz: 50.0  # Cutoff frequency in Hz. Set to null to disable filtering
+filter_order: 4               # Order of the Butterworth filter
+```
+
+This analysis tool uses the same filter implementation as the training pipeline (`scipy.signal.filtfilt` with zero-phase filtering), ensuring consistency between analysis and actual model training.
+
 ## 6. Key Design Choices
 
 *   **PyTorch Lightning**: Simplifies training code, enables multi-GPU, checkpointing, logging.

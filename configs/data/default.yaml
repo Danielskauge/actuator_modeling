@@ -61,4 +61,9 @@ fallback_sampling_frequency: 100.0 # Hz, matches dt=0.01s from synthetic data
 # --- System Geometry (passed to ActuatorDataset) ---
 radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.
 radius_load: 0.3  # meters. Approx. radius of variable mass load (for record-keeping/future use).
-                  # This is an example, update if needed, or remove if not used by ActuatorDataset directly. 
+                  # This is an example, update if needed, or remove if not used by ActuatorDataset directly.
+
+# --- Filter Parameters for ActuatorDataset ---
+# Optional low-pass Butterworth filter applied to the tangential acceleration signal before calculating tau_measured
+filter_cutoff_freq_hz: 50.0  # Cutoff frequency in Hz. Set to null to disable filtering
+filter_order: 4               # Order of the Butterworth filter 
