@@ -7,7 +7,6 @@ import pytorch_lightning as pl
 from torchmetrics import MeanSquaredError, MeanAbsoluteError, R2Score
 from torch.optim.lr_scheduler import LambdaLR # Changed from CosineAnnealingWarmRestarts
 
-from src.models.mlp import MLP
 from src.models.gru import GRUModel # Added for GRU
 
 
@@ -17,8 +16,7 @@ class RootMeanSquaredError(MeanSquaredError):
 
 class ActuatorModel(pl.LightningModule):
     """
-    Lightning module for actuator torque prediction.
-    Can use either an MLP or a GRU model.
+    Lightning module for actuator torque prediction using GRU.
     Can operate in direct prediction mode or residual prediction mode.
     Expects input sequences of length 2. Number of features per step is 3 after removing target_ang_vel.
     Feature order for tau_phys (if calculated from sequence): current_angle, target_angle, current_ang_vel.
@@ -26,18 +24,12 @@ class ActuatorModel(pl.LightningModule):
     
     def __init__(
         self,
-        model_type: str,
         input_dim: int,         # Expect 3 from DataModule (ActuatorDataset.INPUT_DIM)
         # Normalization stats from DataModule
         input_mean: torch.Tensor,
         input_std: torch.Tensor,
         target_mean: torch.Tensor,
         target_std: torch.Tensor,
-        # sampling_frequency: float, # REMOVED - Not needed if target_ang_vel for physics is 0
-        mlp_hidden_dims: list[int] = [64, 128, 64],
-        mlp_activation: str = "relu",
-        mlp_dropout: float = 0.1,
-        mlp_use_batch_norm: bool = True,
         gru_hidden_dim: int = 128,
         gru_num_layers: int = 2,
         gru_dropout: float = 0.1,
@@ -58,17 +50,11 @@ class ActuatorModel(pl.LightningModule):
         Initialize ActuatorModel.
         
         Args:
-            model_type: 'mlp' or 'gru'
             input_dim: Dimension of input features (per timestep for GRU). Should be 3.
             input_mean: Mean of input features for normalization.
             input_std: Standard deviation of input features for normalization.
             target_mean: Mean of target variable for normalization.
             target_std: Standard deviation of target variable for normalization.
-            # sampling_frequency: REMOVED
-            mlp_hidden_dims: List of hidden layer dimensions (for MLP)
-            mlp_activation: Activation function (for MLP)
-            mlp_dropout: Dropout probability (for MLP)
-            mlp_use_batch_norm: Whether to use batch normalization (for MLP)
             gru_hidden_dim: Hidden dimension for GRU
             gru_num_layers: Number of GRU layers
             gru_dropout: Dropout probability for GRU layers
@@ -96,10 +82,7 @@ class ActuatorModel(pl.LightningModule):
 
         if self.hparams.input_dim != 3: # Check for 3 features now
             print(f"Warning: ActuatorModel input_dim={self.hparams.input_dim}, but expected 3 after removing target_ang_vel.")
-        
-        # self.dt = 1.0 / self.hparams.sampling_frequency # REMOVED
 
-        self.model_type = self.hparams.model_type.lower()
         self.use_residual = use_residual
         self.k_spring = k_spring
         self.theta0 = theta0
@@ -110,23 +93,13 @@ class ActuatorModel(pl.LightningModule):
         self.pd_stall_torque_phys_training = pd_stall_torque_phys_training
         self.pd_no_load_speed_phys_training = pd_no_load_speed_phys_training
 
-        if self.model_type == "mlp":
-            mlp_input_dim_effective = self.hparams.input_dim * 2 # seq_len=2 -> 3*2=6
-            print(f"MLP model, effective input_dim (flattened sequence): {mlp_input_dim_effective}")
-            self.model = MLP(
-                input_dim=mlp_input_dim_effective,
-                hidden_dims=self.hparams.mlp_hidden_dims,
-                output_dim=1, activation=self.hparams.mlp_activation,
-                dropout=self.hparams.mlp_dropout, use_batch_norm=self.hparams.mlp_use_batch_norm,
-            )
-        elif self.model_type == "gru":
-            self.model = GRUModel(
-                input_dim=self.hparams.input_dim, # GRU input_dim is per step (3)
-                hidden_dim=self.hparams.gru_hidden_dim, num_layers=self.hparams.gru_num_layers,
-                output_dim=1, dropout=self.hparams.gru_dropout
-            )
-        else:
-            raise ValueError(f"Unsupported model_type: {self.hparams.model_type}")
+        self.model = GRUModel(
+            input_dim=self.hparams.input_dim, # GRU input_dim is per step (3)
+            hidden_dim=self.hparams.gru_hidden_dim, 
+            num_layers=self.hparams.gru_num_layers,
+            output_dim=1, 
+            dropout=self.hparams.gru_dropout
+        )
 
         # Metrics - adding RMSE
         base_metrics = {
@@ -154,15 +127,9 @@ class ActuatorModel(pl.LightningModule):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through the model.
-        x shape for GRU: [batch_size, seq_len, input_dim] -> output [batch_size, 1]
-        x shape for MLP: [batch_size, seq_len, input_dim], will be flattened.
+        Forward pass through the GRU model.
+        x shape: [batch_size, seq_len, input_dim] -> output [batch_size, 1]
         """
-        if self.model_type == "mlp":
-            batch_size = x.size(0)
-            # x has shape [batch, sequence_length, features_per_step]
-            # MLP expects [batch, flattened_features]
-            x = x.view(batch_size, -1) 
         return self.model(x)
 
     def _apply_tsc_to_pd_component(self, pd_joint_torque: torch.Tensor, joint_vel: torch.Tensor) -> torch.Tensor:

@@ -1,7 +1,7 @@
 # Default Training Configuration
 
 # Include model and data configs
-model: "../model/mlp.yaml"
+model: "../model/default.yaml"
 data: "../data/actuator_data.yaml"
 
 # Training parameters

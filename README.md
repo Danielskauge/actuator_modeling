@@ -1,6 +1,6 @@
 # Actuator Modeling with PyTorch Lightning and Hydra
 
-This project focuses on developing and evaluating models to predict joint torque for an actuator system. It utilizes PyTorch Lightning for robust training pipelines and Hydra for flexible configuration management. The primary goal is to understand actuator dynamics and develop models that can generalize across different physical conditions, such as varying inertias.
+This project focuses on developing and evaluating models to predict joint torque for an actuator system. It utilizes PyTorch Lightning for robust training pipelines and Hydra for flexible configuration management. The primary goal is to understand actuator dynamics and develop GRU-based models that can generalize across different physical conditions, such as varying inertias.
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@ This project focuses on developing and evaluating models to predict joint torque
 
 The project aims to predict the torque applied by an actuator based on its state variables. This involves:
 *   Processing raw sensor data from actuator experiments.
-*   Defining neural network architectures (initially GRU, adaptable to MLP and others) to learn torque dynamics.
+*   Defining GRU neural network architectures to learn torque dynamics.
 *   Implementing a flexible training and evaluation pipeline.
 *   Rigorously evaluating model performance, both on data similar to training conditions and on data from unseen physical conditions (specifically, different inertias).
 
@@ -68,9 +68,8 @@ The project aims to predict the torque applied by an actuator based on its state
 ### Model Architectures
 
 *   **`src/models/gru.py:GRUModel`**: Standard GRU network.
-*   **`src/models/mlp.py:MLP`**: Standard MLP. Input dimension is `input_dim * sequence_length`.
 *   **`src/models/model.py:ActuatorModel`**:
-    *   The main `LightningModule`, wrapping GRU or MLP.
+    *   The main `LightningModule`, wrapping GRU.
     *   Receives `input_dim` (3) and normalization statistics from `ActuatorDataModule`.
     *   Detailed behavior regarding residual modeling, normalization, and Torque-Speed Curve (TSC) is described in [Key Design Choices](#key-design-choices).
 
@@ -100,7 +99,6 @@ actuator_modeling/
 │   │   └── __init__.py
 │   ├── models/
 │   │   ├── gru.py             # GRUModel class
-│   │   ├── mlp.py             # MLPModel class (if used)
 │   │   ├── model.py           # ActuatorModel (LightningModule)
 │   │   └── __init__.py
 │   ├── utils/
@@ -218,9 +216,6 @@ python scripts/train_model.py evaluation_mode=lomo_cv
 
 # Override other parameters (e.g., model parameters, training epochs)
 python scripts/train_model.py evaluation_mode=global model.gru_hidden_dim=256 train.max_epochs=100
-
-# Change model type for a run
-python scripts/train_model.py model.model_type=mlp # Ensure mlp specific params are well-defined in model config
 ```
 
 *   Hydra will create an output directory for each run (e.g., `outputs/YYYY-MM-DD/HH-MM-SS/` or `logs/YYYY-MM-DD/HH-MM-SS/` based on Hydra's setup), containing:
