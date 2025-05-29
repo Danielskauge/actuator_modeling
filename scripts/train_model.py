@@ -8,10 +8,12 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
 import numpy as np
 import wandb # Explicit import for wandb.finish()
+import json # For saving config summary
 
 from src.data.datamodule import ActuatorDataModule
 from src.models.model import ActuatorModel
 from src.utils.callbacks import TestPredictionPlotter, EarlySummary # Assuming these exist and are compatible
+from src.data.datasets import ActuatorDataset # To get SEQUENCE_LENGTH
 
 from typing import Tuple, Optional # For CustomEarlyStopping type hints
 
@@ -93,14 +95,11 @@ def train_actuator_model(cfg: DictConfig) -> None:
     print("Starting training script...")
     evaluation_mode = cfg.get('evaluation_mode', 'lomo_cv') # Default to lomo_cv if not set
     print(f"Evaluation mode: {evaluation_mode}")
-    print(OmegaConf.to_yaml(cfg))
+    # print(OmegaConf.to_yaml(cfg)) # Already logged by WandB if active
 
     pl.seed_everything(cfg.seed, workers=True)
 
     datamodule: ActuatorDataModule = hydra.utils.instantiate(cfg.data)
-    # datamodule.setup() # Original call to PL setup(), which calls prepare_data().
-    # prepare_data() now calls _load_all_datasets_once().
-    # Normalization stats will be computed by setup_for_global_run() using the global train split.
     datamodule.prepare_data() # Ensures all raw datasets are loaded.
 
     # --- Model Instantiation Args Preparation ---
@@ -148,6 +147,40 @@ def train_actuator_model(cfg: DictConfig) -> None:
         if input_stats_global is None or target_stats_global is None:
             raise RuntimeError("Global normalization statistics were not computed by the DataModule. Cannot proceed.")
         
+        # Save normalization stats for global run
+        output_dir_global = cfg.outputs_dir # Hydra's output directory for this run
+        os.makedirs(output_dir_global, exist_ok=True)
+        
+        norm_stats_global_dict = {
+            "input_mean": input_stats_global[0].tolist(), # Convert to list
+            "input_std": input_stats_global[1].tolist(),  # Convert to list
+            "target_mean": target_stats_global[0].tolist(),# Convert to list
+            "target_std": target_stats_global[1].tolist()  # Convert to list
+        }
+        # Save as JSON instead of .pt
+        norm_stats_file_path_global = os.path.join(output_dir_global, "normalization_stats.json")
+        with open(norm_stats_file_path_global, 'w') as f:
+            json.dump(norm_stats_global_dict, f, indent=4)
+        print(f"Saved global normalization statistics to {norm_stats_file_path_global}")
+
+        # Save training config summary for global run
+        training_summary_global = {
+            "use_residual": model_cfg_dict.get("use_residual", False),
+            "k_spring": model_cfg_dict.get("k_spring", 0.0),
+            "theta0": model_cfg_dict.get("theta0", 0.0),
+            "kp_phys": model_cfg_dict.get("kp_phys", 0.0),
+            "kd_phys": model_cfg_dict.get("kd_phys", 0.0),
+            "pd_stall_torque_phys_training": model_cfg_dict.get("pd_stall_torque_phys_training", None),
+            "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
+            "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
+            "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
+            "gru_sequence_length": ActuatorDataset.get_sequence_length(), # From dataset class
+            "input_dim": datamodule.get_input_dim()
+        }
+        with open(os.path.join(output_dir_global, "training_config_summary.json"), 'w') as f:
+            json.dump(training_summary_global, f, indent=4)
+        print(f"Saved global training config summary to {output_dir_global}")
+
         model_cfg_dict_global = model_cfg_dict.copy() # Use a copy for global model
         model_cfg_dict_global['input_mean'], model_cfg_dict_global['input_std'] = input_stats_global
         model_cfg_dict_global['target_mean'], model_cfg_dict_global['target_std'] = target_stats_global
@@ -244,21 +277,49 @@ def train_actuator_model(cfg: DictConfig) -> None:
         
         all_fold_test_metrics = []
 
-        # Normalization stats (input_mean, input_std, target_mean, target_std) are ALREADY in model_cfg_dict
-        # from the setup_for_global_run() call made earlier.
-        # ActuatorDataModule.setup_for_lomo_fold() will verify these stats are present.
-
         for fold_idx in range(num_folds):
             print(f"\n===== FOLD {fold_idx + 1} / {num_folds} =====")
             
-            # Setup data for the current LOMO fold. 
-            # This will also compute and store FOLD-SPECIFIC normalization stats in the datamodule.
             datamodule.setup_for_lomo_fold(fold_idx)
 
             input_stats_fold = datamodule.get_input_normalization_stats()
             target_stats_fold = datamodule.get_target_normalization_stats()
             if input_stats_fold is None or target_stats_fold is None:
                 raise RuntimeError(f"Fold-specific normalization statistics were not computed for fold {fold_idx + 1}. Cannot proceed.")
+
+            # Save normalization stats for this LOMO fold
+            output_dir_fold_stats = os.path.join(cfg.outputs_dir, "checkpoints", f"fold_{fold_idx + 1}", "norm_stats_and_config")
+            os.makedirs(output_dir_fold_stats, exist_ok=True)
+            
+            norm_stats_fold_dict = {
+                "input_mean": input_stats_fold[0].tolist(), # Convert to list
+                "input_std": input_stats_fold[1].tolist(),  # Convert to list
+                "target_mean": target_stats_fold[0].tolist(),# Convert to list
+                "target_std": target_stats_fold[1].tolist()  # Convert to list
+            }
+            # Save as JSON instead of .pt
+            norm_stats_file_path_fold = os.path.join(output_dir_fold_stats, "normalization_stats.json")
+            with open(norm_stats_file_path_fold, 'w') as f:
+                json.dump(norm_stats_fold_dict, f, indent=4)
+            print(f"Saved fold {fold_idx + 1} normalization statistics to {norm_stats_file_path_fold}")
+
+            # Save training config summary for this LOMO fold
+            training_summary_fold = {
+                "use_residual": model_cfg_dict.get("use_residual", False),
+                "k_spring": model_cfg_dict.get("k_spring", 0.0),
+                "theta0": model_cfg_dict.get("theta0", 0.0),
+                "kp_phys": model_cfg_dict.get("kp_phys", 0.0),
+                "kd_phys": model_cfg_dict.get("kd_phys", 0.0),
+                "pd_stall_torque_phys_training": model_cfg_dict.get("pd_stall_torque_phys_training", None),
+                "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
+                "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
+                "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
+                "gru_sequence_length": ActuatorDataset.get_sequence_length(),
+                "input_dim": datamodule.get_input_dim()
+            }
+            with open(os.path.join(output_dir_fold_stats, "training_config_summary.json"), 'w') as f:
+                json.dump(training_summary_fold, f, indent=4)
+            print(f"Saved fold {fold_idx + 1} training config summary to {output_dir_fold_stats}")
 
             model_cfg_dict_fold = model_cfg_dict.copy()
             model_cfg_dict_fold['input_mean'], model_cfg_dict_fold['input_std'] = input_stats_fold

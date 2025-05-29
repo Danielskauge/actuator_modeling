@@ -19,12 +19,16 @@ This project focuses on developing and evaluating models to predict joint torque
         *   [Leave-One-Mass-Out Cross-Validation (LOMO CV) Mode](#leave-one-mass-out-cross-validation-lomo-cv-mode)
     *   [Running Training](#running-training)
     *   [Experiment Tracking](#experiment-tracking)
+    *   [Exporting Models](#exporting-models-to-torchscript-jit)
 6.  [Key Design Choices](#key-design-choices)
     *   [PyTorch Lightning](#pytorch-lightning)
     *   [Hydra for Configuration](#hydra-for-configuration)
     *   [Two-Stage Evaluation Strategy](#two-stage-evaluation-strategy)
     *   [Feature Engineering in `ActuatorDataset`](#feature-engineering-in-actuatordataset)
-    *   [Residual Modeling](#residual-modeling)
+    *   [Residual Modeling in `ActuatorModel`](#residual-modeling-in-actuatormodel)
+    *   [Normalization Strategy in `ActuatorModel`](#normalization-strategy-in-actuatormodel)
+    *   [Asymmetric Torque-Speed Curve (TSC)](#asymmetric-torque-speed-curve-tsc)
+    *   [Deployment Considerations](#deployment-considerations)
 7.  [Future Work and Extensions](#future-work-and-extensions)
 
 ## 1. Project Overview
@@ -46,73 +50,43 @@ The project aims to predict the torque applied by an actuator based on its state
         *   Converts angles from degrees to radians.
         *   Calculates current angular velocity from gyroscope data.
         *   Calculates the target `tau_measured` (measured torque) using the formula `inertia * angular_acceleration_from_tangential_accelerometer`.
-        *   Extracts a fixed set of **3 input features** for the model: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`. The explicit `target_ang_vel_rad_s` feature has been removed, relying on the sequence of target angles to implicitly convey this information to the neural network.
+        *   Extracts a fixed set of **3 input features** for the model from the latest timestep of a sequence: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`.
     *   Shapes the data into sequences of a fixed length (`SEQUENCE_LENGTH = 2` by default) suitable for recurrent or time-aware models. The target torque corresponds to the state at the end of the sequence.
-    *   **Important**: `ActuatorDataset` returns **raw, unnormalized** feature sequences (`x_sequence`) and target torques (`y_torque`) as PyTorch tensors. It does not perform statistical normalization (e.g., z-scoring).
-    *   Provides static methods `get_input_dim()` (which will return 3) and `get_sequence_length()` for consistent model initialization, and `get_sampling_frequency()` (though this is not directly used by `ActuatorModel` anymore).
+    *   **Important**: `ActuatorDataset` returns **raw, unnormalized** feature sequences (`x_sequence`) and target torques (`y_torque`) as PyTorch tensors.
+    *   Provides static methods `get_input_dim()` (returns 3) and `get_sequence_length()` (returns 2 by default) for consistent model initialization.
 
 *   **`src/data/datamodule.py:ActuatorDataModule`**:
-    *   A PyTorch Lightning `LightningDataModule` that orchestrates the use of `ActuatorDataset`.
-    *   Supports loading multiple CSV files per inertia group from organized subfolders. Each inertia group is defined by:
-        *   `id`: A unique identifier for the group
-        *   `folder`: The subfolder name under the base data directory
-        *   `inertia`: The numerical inertia value for all CSV files in this group
-    *   Automatically discovers and loads all `*.csv` files within each group's subfolder.
-    *   **Normalization Strategy**: `ActuatorDataModule` is responsible for calculating and providing the necessary normalization statistics (mean and standard deviation) for both input features and the target torque. This is handled differently based on the evaluation mode:
-        *   **Global Run Mode (`setup_for_global_run`)**:
-            *   After combining all datasets and performing a single train/validation/test split on this aggregated data, normalization statistics are computed **exclusively from the `global_train_dataset`**.
-            *   These global statistics are stored within the datamodule instance.
-        *   **LOMO CV Fold Mode (`setup_for_lomo_fold`)**:
-            *   For each fold, one entire inertia group is held out as the validation and test set.
-            *   Normalization statistics are computed **independently for each fold, using only the `current_fold_train_dataset`** (i.e., data from all inertia groups *except* the one held out for that fold). This ensures that no information from the fold's validation/test set influences the normalization process, preventing data leakage.
-            *   These fold-specific statistics are stored within the datamodule instance for the current fold.
-    *   Provides accessor methods (`get_input_normalization_stats()`, `get_target_normalization_stats()`) for the training script to retrieve the relevant statistics.
-    *   Supports two primary setup modes for evaluation (controlled by the main training script via `cfg.evaluation_mode`):
-        1.  **Global Run Mode (`setup_for_global_run`)**: Combines all individual datasets from all groups and performs a single train/validation/test split on this aggregated data. This is used to assess overall model learning capability. Normalization stats are derived from this mode's training split.
-        2.  **LOMO CV Fold Mode (`setup_for_lomo_fold`)**: Sets up data for a specific fold in Leave-One-Mass-Out Cross-Validation. In each fold, one entire inertia group (all CSV files for that inertia) is held out as the validation and test set (unseen inertia), while datasets from all other groups are used for training. Normalization stats are derived from this fold's specific training set. This rigorously tests generalization to new inertias.
-    *   Provides the necessary `train_dataloader()`, `val_dataloader()`, and `test_dataloader()` based on the active mode.
+    *   A PyTorch Lightning `LightningDataModule` orchestrating `ActuatorDataset`.
+    *   Loads multiple CSVs per inertia group (defined by `id`, `folder`, `inertia`).
+    *   **Normalization Strategy**: Computes normalization statistics (mean, std) for input features and target torque. These statistics are crucial for `ActuatorModel` and are saved by the training script (`scripts/train_model.py`) to a human-readable `normalization_stats.json` file for each run/fold. `ActuatorDataModule` itself calculates these stats based on:
+        *   **Global Run Mode**: Stats from the `global_train_dataset`.
+        *   **LOMO CV Fold Mode**: Stats independently from each fold's `current_fold_train_dataset` (excluding held-out data) to prevent leakage.
+    *   Provides `get_input_normalization_stats()` and `get_target_normalization_stats()`.
+    *   Supports two setup modes: `setup_for_global_run` and `setup_for_lomo_fold`.
 
 ### Model Architectures
 
-*   **`src/models/gru.py:GRUModel`**:
-    *   Implements a Gated Recurrent Unit (GRU) network.
-    *   Configurable `input_dim` (which will be 3 per timestep), `hidden_dim`, `num_layers`, `output_dim`, and `dropout`.
-    *   Uses `batch_first=True` and processes sequences, taking the GRU output from the last timestep for prediction.
-*   **`src/models/mlp.py:MLP`**: (If used, or as a reference for other architectures)
-    *   A standard Multi-Layer Perceptron. Input dimension will be `input_dim * sequence_length` (e.g., 3 * 2 = 6).
-    *   Configurable hidden layer dimensions, activation function, dropout, and batch normalization.
+*   **`src/models/gru.py:GRUModel`**: Standard GRU network.
+*   **`src/models/mlp.py:MLP`**: Standard MLP. Input dimension is `input_dim * sequence_length`.
 *   **`src/models/model.py:ActuatorModel`**:
-    *   The main `LightningModule` that wraps the chosen neural network (e.g., `GRUModel`).
-    *   **Dynamically configured `input_dim` (now 3)** is passed during instantiation from the `ActuatorDataModule` via the training script.
-    *   **Normalization Handling**:
-        *   Accepts pre-calculated `input_mean`, `input_std`, `target_mean`, and `target_std` during initialization. These statistics are provided by the `ActuatorDataModule` (and are specific to the global training set or the current LOMO CV fold's training set) and are registered as buffers within the model.
-        *   **Input Normalization**: In its `step` method, raw input sequences `x` (from `ActuatorDataset`) are normalized using the provided `input_mean` and `input_std` before being fed into the underlying neural network (MLP or GRU).
-        *   **Target Normalization for Loss**: The raw target torque `y_measured_torque` is also normalized using `target_mean` and `target_std`. The loss function is computed against this normalized target.
-        *   **Residual Modeling with Normalization**:
-            *   If `use_residual: True`, the `_calculate_tau_phys` method computes the physics-based torque component using the **original, raw (unnormalized)** input features `x`.
-            *   The resulting `tau_phys` (in physical units) is then **normalized** using `target_mean` and `target_std`.
-            *   The model is trained to predict the difference between the *normalized* `y_measured_torque` and this *normalized* `tau_phys`. The model's direct output is thus a normalized residual.
-        *   **Denormalization for Metrics**: For calculating performance metrics (MSE, RMSE, MAE, R2), the model's final prediction (which is in the normalized scale, and includes the re-addition of the *normalized* `tau_phys` if in residual mode) is **denormalized** back to the original physical scale using `target_mean` and `target_std`. Metrics are then computed by comparing this denormalized prediction against the original, raw `y_measured_torque`. This ensures metrics are interpretable in their physical units.
-    *   Handles the training, validation, and test steps.
-    *   Calculates loss (MSE by default, with an optional first-difference torque smoothing term) on normalized values.
-    *   Computes and logs various metrics (MSE, RMSE, MAE, R2) on denormalized, physical-scale values.
-    *   Implements optimizer (AdamW) and learning rate scheduler (linear warmup followed by cosine decay).
+    *   The main `LightningModule`, wrapping GRU or MLP.
+    *   Receives `input_dim` (3) and normalization statistics from `ActuatorDataModule`.
+    *   Detailed behavior regarding residual modeling, normalization, and Torque-Speed Curve (TSC) is described in [Key Design Choices](#key-design-choices).
 
 ### Training and Evaluation
 
-*   **`scripts/train_model.py`**:
-    *   The main script for initiating training using Hydra.
-    *   Instantiates `ActuatorDataModule` and `ActuatorModel`, passing the dynamic `input_dim` (3) from the datamodule to the model.
-    *   Instantiates PyTorch Lightning `Trainer` with callbacks.
-    *   Manages the selected evaluation strategy (`global` or `lomo_cv`) based on `cfg.evaluation_mode`.
+*   **`scripts/train_model.py`**: Main Hydra-driven training script.
+    *   Instantiates `ActuatorDataModule` and `ActuatorModel`.
+    *   Passes normalization stats from datamodule to model.
+    *   Manages evaluation strategy (`global` or `lomo_cv`).
 
 ### Configuration Management
 
 *   **Hydra (`configs/`)**:
-    *   `configs/config.yaml`: Main configuration. Includes `evaluation_mode` to switch between global and LOMO CV runs.
-    *   `configs/data/default.yaml`: Configures `ActuatorDataModule` with the new grouped structure. Includes `data_base_dir` (base directory path) and `inertia_groups` (list of group configurations). `input_dim` is now implicitly 3 due to `ActuatorDataset` changes. Includes `fallback_sampling_frequency` (though `ActuatorModel` no longer uses it directly).
-    *   `configs/model/default.yaml`: Configures `ActuatorModel`. `input_dim` is no longer set here but passed dynamically. `sampling_frequency` is not used.
-    *   `configs/train/default.yaml`: Includes `callbacks` section to toggle common callbacks and settings for `gradient_clip_val` and `early_stopping.active`.
+    *   `configs/config.yaml`: Main configuration.
+    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`.
+    *   `configs/model/default.yaml`: Configures `ActuatorModel`. Includes parameters for the physics-based model (`k_spring`, `theta0`, `kp_phys`, `kd_phys`) and, critically, the new parameters for the optional Torque-Speed Curve (TSC) applied to the PD component during training: `pd_stall_torque_phys_training` and `pd_no_load_speed_phys_training`.
+    *   `configs/train/default.yaml`: Training loop settings.
 
 ## 3. Codebase Structure
 
@@ -121,12 +95,12 @@ actuator_modeling/
 ├── configs/                   # Hydra configuration files
 │   ├── data/                  # Data module configurations
 │   ├── model/                 # Model configurations (GRU, MLP, etc.)
+│   │   ├── model_type/        # Model-specific configurations
+│   │   └── default.yaml       # Contains ActuatorModel HPs, including physics and TSC params
 │   └── train/                 # Training loop configurations
 │   └── config.yaml            # Main Hydra configuration
 ├── data/                      # Placeholder for raw and processed data
 │   └── synthetic_raw/         # Example: Directory for raw synthetic CSVs
-├── logs/                      # Output directory for Hydra runs (contains logs, checkpoints)
-├── models/                    # (Potentially for manually saved/exported models, distinct from Hydra logs)
 ├── scripts/                   # Executable scripts
 │   └── train_model.py         # Main training script
 │   └── generate_synthetic_csv.py # Utility for generating synthetic data (example)
@@ -261,6 +235,8 @@ python scripts/train_model.py model.model_type=mlp # Ensure mlp specific params 
     *   `.hydra` directory with the run's specific configuration.
     *   Log files.
     *   Checkpoints saved by PyTorch Lightning (e.g., in a `checkpoints` subfolder).
+    *   `training_config_summary.json`: A summary of key training parameters, including those for the physics-based model, GRU architecture, and input dimensions.
+    *   `normalization_stats.json`: Normalization statistics (mean, std) for input features and the target, saved in a human-readable JSON format, preserving the feature order from `ActuatorDataset.FEATURE_NAMES`.
 
 ### Exporting Models to TorchScript (JIT)
 
@@ -292,17 +268,54 @@ After training, the best model checkpoint can be automatically exported to a Tor
 
 ## 6. Key Design Choices
 
-*   **PyTorch Lightning**: Chosen to simplify boilerplate training code, enable easy multi-GPU training, provide robust checkpointing, and integrate well with logging and callbacks.
-*   **Hydra for Configuration**: Provides a highly flexible and powerful way to manage all aspects of the project (data, model, training, logging) through YAML files and command-line overrides. This facilitates experimentation and reproducibility.
-*   **Two-Stage Evaluation Strategy**: Controlled by `evaluation_mode`.
-    1.  **Global Mode**: First, verify the model can learn from the entire dataset distribution. Normalization statistics are derived from the training split of this global dataset.
-    2.  **LOMO CV Mode**: Second, specifically test generalization to unseen inertias, which is critical for real-world applicability. Normalization statistics are derived *independently for each fold* from that fold's specific training data (excluding the held-out inertia). This separation allows for a more structured approach to model development and ensures valid generalization assessment.
-*   **Input and Target Normalization**:
-    *   Input features (after initial unit conversions by `ActuatorDataset`) and target torque values are statistically normalized (z-scored) before being used by the neural network for training.
-    *   The normalization statistics (mean and standard deviation) are calculated by `ActuatorDataModule`, ensuring they are derived only from the appropriate training set (either the global training set or the fold-specific training set in LOMO CV).
-    *   `ActuatorModel` performs the normalization of inputs and targets, and denormalizes its output predictions before metric calculation, ensuring metrics are in interpretable physical units. This is crucial for stable training and proper model evaluation.
-*   **Feature Engineering in `ActuatorDataset`**: Centralizing feature calculation (angles to radians, derivatives, `tau_measured`) within the dataset class ensures consistency. The model now uses 3 core input features per timestep (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`).
-*   **Residual Modeling (`ActuatorModel`)**: The option to predict a residual torque (actual torque minus a physics-based model component) can sometimes help the model focus on learning the more complex, unmodeled dynamics. For the physics-based component, the target angular velocity (for the `kd_phys` term) is assumed to be zero. The normalization strategy correctly handles the scales when combining learned residuals with the physics-based component.
+*   **PyTorch Lightning**: Simplifies training code, enables multi-GPU, checkpointing, logging.
+*   **Hydra for Configuration**: Flexible management of data, model, training parameters.
+*   **Two-Stage Evaluation Strategy**: `global` mode for overall learning, `lomo_cv` for generalization to unseen inertias with fold-specific normalization.
+*   **Feature Engineering in `ActuatorDataset`**: Centralized calculation of 3 core input features (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`) in a **defined order** as specified by `ActuatorDataset.FEATURE_NAMES`. This order is critical as it's implicitly used for calculating and applying normalization statistics and by the input layer of models, including the deployed `CombinedGRUAndPDActuator`. Raw, unnormalized data is passed to `ActuatorDataModule`.
+
+*   **Residual Modeling in `ActuatorModel`**:
+    *   Controlled by `use_residual: True` in model configuration.
+    *   If true, the model learns to predict a residual to an analytical physics-based model (`tau_phys`).
+    *   **`_calculate_tau_phys` Method**:
+        *   Input: Uses **raw (unnormalized)** features (`current_angle_k`, `target_angle_k`, `current_ang_vel_k`) from the latest timestep of the input sequence `x_sequence`.
+        *   PD Component (`tau_pd_only`): `kp_phys * error_pos_k + kd_phys * error_vel_k`.
+            *   `error_pos_k = target_angle_k - current_angle_k`.
+            *   `error_vel_k = 0 - current_ang_vel_k` (target angular velocity for this PD term is assumed to be zero).
+        *   **Optional Torque-Speed Curve (TSC) on PD Component**: If `pd_stall_torque_phys_training` and `pd_no_load_speed_phys_training` are configured (and valid > 0), an asymmetric TSC (see [Asymmetric Torque-Speed Curve (TSC)](#asymmetric-torque-speed-curve-tsc) below) is applied *exclusively* to `tau_pd_only` via the `_apply_tsc_to_pd_component` method, resulting in `saturated_tau_pd_only`.
+        *   Spring Component (`tau_spring_comp`): `k_spring * (current_angle_k - theta0)`.
+        *   Final `tau_phys` (physical units): `saturated_tau_pd_only` (if TSC applied, else raw `tau_pd_only`) + `tau_spring_comp`.
+    *   This `tau_phys` is then normalized for calculating the residual target.
+
+*   **Normalization Strategy in `ActuatorModel`**:
+    *   **Input Normalization**: Raw input sequences `x` from `ActuatorDataset` are normalized using `input_mean` and `input_std` (from `ActuatorDataModule`) before being fed into the neural network.
+    *   **Neural Network Output**: The direct output of the neural network (`y_hat_model_output_normalized`) is always in the normalized scale.
+    *   **Target Normalization for Loss**: The raw target torque `y_measured_torque_raw` is normalized to `y_target_for_loss_normalized` using `target_mean` and `target_std`.
+    *   **Loss Calculation**:
+        *   If `use_residual: True`:
+            1.  `tau_phys_raw` is calculated (potentially with TSC on its PD part) using unnormalized `x`.
+            2.  `tau_phys_raw` is normalized to `tau_phys_normalized` (using `target_mean`, `target_std`).
+            3.  The learning target for the NN is `residual_normalized = y_target_for_loss_normalized - tau_phys_normalized`.
+            4.  Loss is computed between `y_hat_model_output_normalized` (NN's prediction of `residual_normalized`) and `residual_normalized`.
+        *   If `use_residual: False`:
+            1.  The learning target for the NN is `y_target_for_loss_normalized`.
+            2.  Loss is computed between `y_hat_model_output_normalized` and `y_target_for_loss_normalized`.
+    *   **Denormalization for Metrics**:
+        *   If `use_residual: True`, the full torque prediction in normalized scale is `y_pred_final_normalized = y_hat_model_output_normalized + tau_phys_normalized`.
+        *   If `use_residual: False`, `y_pred_final_normalized = y_hat_model_output_normalized`.
+        *   This `y_pred_final_normalized` is then denormalized to physical scale using `target_mean` and `target_std`.
+        *   Performance metrics (MSE, RMSE, MAE, R2) are computed by comparing this denormalized prediction against the original, raw `y_measured_torque_raw`.
+
+*   **Asymmetric Torque-Speed Curve (TSC)**:
+    *   The TSC implemented (both in `ActuatorModel._apply_tsc_to_pd_component` for training and in the Isaac Lab `CombinedGRUAndPDActuator` for deployment) is asymmetric.
+    *   This means that when the motor is moving:
+        *   The maximum torque it can produce *in the direction of that motion* is limited by the curve: `stall_torque * (1 - |velocity| / no_load_speed)`.
+        *   The maximum torque it can produce *in the direction opposing that motion* (braking) is limited by the full `stall_torque`.
+    *   At zero speed, the motor can apply up to `stall_torque` in either direction.
+
+*   **Deployment Considerations (Connection to Isaac Lab Actuator)**:
+    *   The parameters configured in `ActuatorModel` for the physics-based component (`kp_phys`, `kd_phys`, `k_spring`, `theta0`), its optional TSC (`pd_stall_torque_phys_training`, `pd_no_load_speed_phys_training`), GRU architecture (`gru_num_layers`, `gru_hidden_dim`, `gru_sequence_length`), and other vital details like `use_residual` and `input_dim` are saved in the `training_config_summary.json` during the training pipeline.
+    *   The Isaac Lab actuator class (e.g., `CombinedGRUAndPDActuator`) reads this `training_config_summary.json`. If `use_residual` is true in the summary, the Isaac Lab actuator replicates the same analytical base model by using these parameters from the summary. This includes applying the same TSC to its PD component *before* adding spring torque.
+    *   Crucially, `CombinedGRUAndPDActuator` also loads the corresponding `normalization_stats.json` file. These statistics (input means and standard deviations) are used to normalize the input features (current angle, target angle, current angular velocity) before feeding them to its GRU component. This ensures that the data seen by the GRU at deployment time is processed in the exact same way as during training. The order of features in the `normalization_stats.json` (derived from `ActuatorDataset.FEATURE_NAMES`) must align with how `CombinedGRUAndPDActuator` constructs its input sequence for the GRU.
 
 ## 7. Future Work and Extensions
 

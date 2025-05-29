@@ -50,6 +50,8 @@ class ActuatorModel(pl.LightningModule):
         kd_phys: float = 0.0,
         loss_diff_weight: float = 0.1,
         warmup_epochs: int = 1,
+        pd_stall_torque_phys_training: float | None = None, # Added for TSC during training
+        pd_no_load_speed_phys_training: float | None = None, # Added for TSC during training
         **kwargs
     ):
         """
@@ -79,6 +81,8 @@ class ActuatorModel(pl.LightningModule):
             kd_phys: Derivative gain for physical model part of tau_phys
             loss_diff_weight: Weight for the first-difference of torque predictions in the loss
             warmup_epochs: Number of epochs for learning rate warmup in cosine scheduler.
+            pd_stall_torque_phys_training: Stall torque for PD component in tau_phys during training.
+            pd_no_load_speed_phys_training: No-load speed for PD component in tau_phys during training.
         """
         super().__init__()
         # Save all relevant hyperparameters, including normalization stats
@@ -102,6 +106,9 @@ class ActuatorModel(pl.LightningModule):
         self.kp_phys = kp_phys
         self.kd_phys = kd_phys
         self.loss_diff_weight = loss_diff_weight
+        # Store TSC parameters for _calculate_tau_phys
+        self.pd_stall_torque_phys_training = pd_stall_torque_phys_training
+        self.pd_no_load_speed_phys_training = pd_no_load_speed_phys_training
 
         if self.model_type == "mlp":
             mlp_input_dim_effective = self.hparams.input_dim * 2 # seq_len=2 -> 3*2=6
@@ -158,6 +165,50 @@ class ActuatorModel(pl.LightningModule):
             x = x.view(batch_size, -1) 
         return self.model(x)
 
+    def _apply_tsc_to_pd_component(self, pd_joint_torque: torch.Tensor, joint_vel: torch.Tensor) -> torch.Tensor:
+        """
+        Clips the PD torque based on an asymmetrical torque-speed curve, using training-time parameters.
+        This is for the PD component within _calculate_tau_phys.
+        """
+        stall_torque = self.pd_stall_torque_phys_training
+        no_load_speed = self.pd_no_load_speed_phys_training
+
+        # Only apply if TSC parameters are valid
+        if stall_torque is None or stall_torque <= 0 or no_load_speed is None or no_load_speed <= 0:
+            return pd_joint_torque # Return original torque if TSC is not properly configured
+
+        vel_ratio = joint_vel.abs() / no_load_speed
+        torque_multiplier = torch.clip(1.0 - vel_ratio, min=0.0, max=1.0)
+        max_torque_in_vel_direction = stall_torque * torque_multiplier
+
+        saturated_torque = pd_joint_torque.clone()
+
+        positive_vel_mask = joint_vel > 0
+        if torch.any(positive_vel_mask):
+            saturated_torque[positive_vel_mask] = torch.clip(
+                pd_joint_torque[positive_vel_mask],
+                min=-stall_torque,
+                max=max_torque_in_vel_direction[positive_vel_mask]
+            )
+
+        negative_vel_mask = joint_vel < 0
+        if torch.any(negative_vel_mask):
+            saturated_torque[negative_vel_mask] = torch.clip(
+                pd_joint_torque[negative_vel_mask],
+                min=-max_torque_in_vel_direction[negative_vel_mask],
+                max=stall_torque
+            )
+        
+        zero_vel_mask = joint_vel == 0
+        if torch.any(zero_vel_mask):
+            saturated_torque[zero_vel_mask] = torch.clip(
+                pd_joint_torque[zero_vel_mask],
+                min=-stall_torque,
+                max=stall_torque
+            )
+            
+        return saturated_torque
+
     def _calculate_tau_phys(self, x_sequence: torch.Tensor) -> torch.Tensor:
         """
         Calculates physics-based torque (tau_phys) using the input sequence x_sequence.
@@ -185,9 +236,13 @@ class ActuatorModel(pl.LightningModule):
         error_vel_k = target_ang_vel_for_physics_term - current_ang_vel_k # Effectively -current_ang_vel_k
         
         tau_spring_comp = self.k_spring * (current_angle_k - self.theta0)
-        tau_pd_comp = self.kp_phys * error_pos_k + self.kd_phys * error_vel_k
+        # Calculate PD torque component separately
+        tau_pd_only = self.kp_phys * error_pos_k + self.kd_phys * error_vel_k
         
-        tau_phys = tau_spring_comp + tau_pd_comp
+        # Apply TSC to the PD component if configured for training
+        saturated_tau_pd_only = self._apply_tsc_to_pd_component(tau_pd_only, current_ang_vel_k)
+        
+        tau_phys = tau_spring_comp + saturated_tau_pd_only
         return tau_phys.unsqueeze(1) # Shape [batch_size, 1]
 
     def step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int, stage: str) -> Dict[str, torch.Tensor]:

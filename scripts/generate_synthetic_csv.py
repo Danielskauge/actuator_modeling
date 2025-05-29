@@ -11,20 +11,20 @@ G_ACCEL = 9.81  # m/s^2
 class SyntheticDataConfig:
     # File output
     output_dir: str = "data/synthetic_raw" # Subdirectory for generated CSVs
-    num_files_to_generate: int = 3
+    num_different_inertias: int = 1
     base_filename: str = "synthetic_actuator_data_mass"
 
     # System properties (can be varied per file)
-    base_inertia: float = 0.01  # kg*m^2 (will be varied)
+    base_inertia: float = 0.083  # kg*m^2 (will be varied)
     radius_for_acc_y: float = 0.2 # meters (distance from pivot to Acc_Y sensor, for Acc_Y generation)
     
     # PD Controller for generating behavior (these are the *true* underlying parameters)
     kp_true: float = 10.0
-    kd_true: float = 0.2
-    stall_torque_nm: float = 2.0
+    kd_true: float = 1.0
+    stall_torque_nm: float = 10
 
     # Parallel Spring for generating behavior (true underlying parameters)
-    k_spring_true: float = 0.5 # Nm/rad
+    k_spring_true: float = 0.0 # Nm/rad
     theta0_spring_true: float = 0.0 # Equilibrium angle in radians
 
     # Simulation settings
@@ -134,7 +134,7 @@ def main():
     print(f"Generating synthetic data. Output directory: {cfg.output_dir}")
 
     generated_files_metadata = [] # Store dicts with path, inertia, and folder name
-    for i in range(cfg.num_files_to_generate):
+    for i in range(cfg.num_different_inertias):
         # Vary inertia for each file group.
         # The script currently generates distinct files each with potentially different inertias.
         # For the LOMO CV structure, each of these files will effectively become its own "group"

@@ -6,9 +6,7 @@ data_base_dir: "data/synthetic_raw"
 # List of inertia groups for synthetic data. Each group contains multiple CSV files.
 # This configuration is useful for testing and development.
 inertia_groups:
-  - {id: "synthetic_mass_0", folder: "mass_0.01", inertia: 0.0100}
-  - {id: "synthetic_mass_1", folder: "mass_0.015", inertia: 0.0150}
-  - {id: "synthetic_mass_2", folder: "mass_0.02", inertia: 0.0200}
+  - {id: "test_inertia", folder: "0.083kgm2", inertia: 0.083}
 
 # Example directory structure for synthetic data:
 # data/synthetic_raw/
@@ -42,4 +40,3 @@ fallback_sampling_frequency: 100.0 # Hz
 
 # --- System Geometry ---
 radius_accel: 0.2 # meters
-radius_load: 0.3  # meters 

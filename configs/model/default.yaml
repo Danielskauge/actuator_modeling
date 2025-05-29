@@ -19,12 +19,21 @@ warmup_epochs: 1 # For cosine scheduler with linear warmup
 use_residual: false # If True, model predicts tau_measured - tau_phys
 
 # --- Physics Parameters for tau_phys calculation (used if use_residual: true) ---
-# tau_phys(k) = k_spring*(theta(k) - theta0) + kp_phys*(error(k)) + kd_phys*(error_dot(k))
-# These are also used by the dataset if tau_cmd(k-1) feature requires calculating tau_phys(k-1).
-k_spring: 0.0   # Spring constant (Nm/rad)
-theta0: 0.0     # Spring equilibrium angle (radians)
-kp_phys: 0.0    # PD Kp for physical model (Nm/rad)
-kd_phys: 0.0    # PD Kd for physical model (Nm*s/rad)
+# This is the PD (+spring) controller whose output is subtracted from y_measured_torque
+# for the NN to learn the residual.
+# tau_phys(k) = k_spring*(theta(k) - theta0) + kp_phys*(error_pos(k)) + kd_phys*(error_vel(k))
+# where error_vel(k) = (0 - current_ang_vel(k))
+k_spring: 0.0   # Spring constant (Nm/rad) for the tau_phys model
+theta0: 0.0     # Spring equilibrium angle (radians) for the tau_phys model
+kp_phys: 0.0    # Proportional gain (Nm/rad) for the tau_phys model
+kd_phys: 0.0    # Derivative gain (Nm*s/rad) for the tau_phys model
+
+# Torque-speed curve parameters for the PD controller defining tau_phys in training.
+# If these are null, tau_phys is not subject to a TSC during its calculation in training.
+# ActuatorModel._calculate_tau_phys currently does NOT use these.
+# If it were to, these would be the parameters.
+pd_stall_torque_phys_training: null # Stall torque (Nm) for the PD part of tau_phys, if it had a TSC.
+pd_no_load_speed_phys_training: null # No-load speed (rad/s) for PD part of tau_phys, if it had a TSC.
 
 # --- Loss Configuration ---
 loss_diff_weight: 0.1 # Weight for the first-difference of torque predictions in the loss

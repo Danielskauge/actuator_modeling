@@ -1,0 +1,13 @@
+{
+    "folders": [
+        {
+            "path": "."
+        },
+        {
+            "path": "../mars_jumper"
+        },
+        {
+            "path": "../IsaacLab"
+        }
+    ]
+}

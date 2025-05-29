@@ -1,6 +1,7 @@
 import os
 import glob
 from typing import Optional, List, Dict, Any, Tuple
+import json
 
 import pytorch_lightning as pl
 import torch
@@ -68,6 +69,26 @@ class ActuatorDataModule(pl.LightningDataModule):
         self.target_mean: Optional[torch.Tensor] = None
         self.target_std: Optional[torch.Tensor] = None
         self._normalization_stats_computed_for_global_train: bool = False
+
+    def _save_normalization_stats_to_json(self, file_path: str):
+        """Saves normalization statistics to a JSON file."""
+        if self.input_mean is None or self.input_std is None or \
+           self.target_mean is None or self.target_std is None:
+            print("Warning: Normalization stats are not computed. Cannot save.")
+            return
+
+        stats_dict = {
+            "input_mean": self.input_mean.tolist(),
+            "input_std": self.input_std.tolist(),
+            "target_mean": self.target_mean.tolist(),
+            "target_std": self.target_std.tolist()
+        }
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(stats_dict, f, indent=4)
+            print(f"  Normalization statistics saved to {file_path}")
+        except Exception as e:
+            print(f"  Error saving normalization statistics to {file_path}: {e}")
 
     def _load_all_datasets_once(self):
         """Helper to load all ActuatorDataset instances if not already loaded."""
@@ -163,7 +184,7 @@ class ActuatorDataModule(pl.LightningDataModule):
             self.target_mean = torch.zeros(1)
             self.target_std = torch.ones(1)
             # If this was intended for the global train set, mark it as "computed" (even if badly)
-            if reference_dataset == self.global_train_dataset: # Check identity
+            if hasattr(self, 'global_train_dataset') and self.global_train_dataset is not None and reference_dataset == self.global_train_dataset: # Check identity
                 self._normalization_stats_computed_for_global_train = True
             return
 
@@ -184,7 +205,7 @@ class ActuatorDataModule(pl.LightningDataModule):
             self.input_std = torch.ones(input_dim)
             self.target_mean = torch.zeros(1)
             self.target_std = torch.ones(1)
-            if reference_dataset == self.global_train_dataset:
+            if hasattr(self, 'global_train_dataset') and self.global_train_dataset is not None and reference_dataset == self.global_train_dataset:
                  self._normalization_stats_computed_for_global_train = True
             return
 
@@ -209,6 +230,12 @@ class ActuatorDataModule(pl.LightningDataModule):
            reference_dataset == self.global_train_dataset: 
             self._normalization_stats_computed_for_global_train = True
         # For LOMO, stats are computed per fold, so this global flag isn't set by LOMO's reference_dataset
+        
+        # Attempt to save stats to JSON if they are computed
+        # The actual saving point might be better placed after the specific setup methods
+        # (setup_for_global_run or setup_for_lomo_fold) determine the final reference_dataset
+        # and path. For now, this demonstrates the calculation.
+        # Actual saving will be triggered by those methods.
 
     def setup(self, stage: Optional[str] = None):
         """
@@ -269,6 +296,11 @@ class ActuatorDataModule(pl.LightningDataModule):
         if not self._normalization_stats_computed_for_global_train:
             if self.global_train_dataset and len(self.global_train_dataset) > 0:
                 self._calculate_normalization_stats(self.global_train_dataset)
+                # Save stats after computing for global run
+                stats_dir = os.path.join(self.hparams.data_base_dir, "processed_stats")
+                os.makedirs(stats_dir, exist_ok=True)
+                stats_file_path = os.path.join(stats_dir, "normalization_stats_global.json")
+                self._save_normalization_stats_to_json(stats_file_path)
             else:
                 print("Warning: Global train dataset is empty or not set. Cannot compute global normalization stats.")
                 # Fallback to zero mean, one std to prevent errors, though this is not ideal.
@@ -322,6 +354,11 @@ class ActuatorDataModule(pl.LightningDataModule):
             # Calculate normalization stats for THIS FOLD's training data
             if self.current_fold_train_dataset and len(self.current_fold_train_dataset) > 0:
                 self._calculate_normalization_stats(self.current_fold_train_dataset)
+                # Save stats after computing for LOMO fold
+                stats_dir = os.path.join(self.hparams.data_base_dir, "processed_stats")
+                os.makedirs(stats_dir, exist_ok=True)
+                stats_file_path = os.path.join(stats_dir, f"normalization_stats_fold_{fold_index}.json")
+                self._save_normalization_stats_to_json(stats_file_path)
             else:
                 print(f"  Warning: LOMO Fold {fold_index + 1} has no training data. Cannot compute fold-specific normalization stats. Model will use zero mean, unit std.")
                 input_dim = ActuatorDataset.get_input_dim()
