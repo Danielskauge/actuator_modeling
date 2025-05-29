@@ -2,7 +2,8 @@ import torch
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
-from typing import Tuple, List, Dict, Any
+from typing import Tuple, List, Dict, Any, Optional
+from scipy.signal import butter, filtfilt
 
 # Constants
 RAD_PER_DEG = np.pi / 180.0
@@ -33,7 +34,9 @@ class ActuatorDataset(Dataset):
         radius_accel: float,
         gyro_axis_for_ang_vel: str = 'Gyro_Z',
         accel_axis_for_torque: str = 'Acc_Y',
-        target_name: str = 'tau_measured'
+        target_name: str = 'tau_measured',
+        filter_cutoff_freq_hz: Optional[float] = None,
+        filter_order: int = 4
     ):
         """
         Args:
@@ -43,6 +46,8 @@ class ActuatorDataset(Dataset):
             gyro_axis_for_ang_vel: Gyroscope axis ('Gyro_X', 'Gyro_Y', 'Gyro_Z') for signed angular velocity.
             accel_axis_for_torque: Accelerometer axis ('Acc_X', 'Acc_Y', 'Acc_Z') for tangential acceleration.
             target_name: Name of the target column to predict.
+            filter_cutoff_freq_hz: Optional cutoff frequency in Hz for a low-pass Butterworth filter applied to the tangential acceleration signal used for deriving tau_measured. If None, no filter is applied.
+            filter_order: Order of the Butterworth filter if used.
         """
         self.csv_file_path = csv_file_path
         self.inertia = inertia
@@ -50,6 +55,8 @@ class ActuatorDataset(Dataset):
         self.gyro_axis_for_ang_vel = gyro_axis_for_ang_vel
         self.accel_axis_for_torque = accel_axis_for_torque
         self.target_name = target_name
+        self.filter_cutoff_freq_hz = filter_cutoff_freq_hz
+        self.filter_order = filter_order
 
         self.data_df = self._load_and_preprocess_data()
         self.X_sequences, self.y_sequences = self._create_sequences()
@@ -101,14 +108,7 @@ class ActuatorDataset(Dataset):
             print(f"Warning: Using magnitude of gyro for current_ang_vel_rad_s. Sign information is lost. Gyro_axis specified: {self.gyro_axis_for_ang_vel}")
 
 
-        # 3b. Target Angular Velocity (theta_d_dot) - REMOVED
-        # df['target_ang_vel_rad_s'] = np.gradient(df['target_angle_rad'], dt_series, edge_order=2)
-
-        # 4. Angular Acceleration (alpha) for tau_measured - numerical differentiation of current_ang_vel
-        # This is used for calculating the target torque, not as a model input feature directly.
-        df['current_ang_accel_rad_s2_for_target'] = np.gradient(df['current_ang_vel_rad_s'], dt_series, edge_order=2)
-        
-        # 5. Measured Torque (tau_measured) - Ground Truth
+        # 4. Measured Torque (tau_measured) - Ground Truth
         # Calculation based on tangential accelerometer: tau = I * (a_tangential / r)
         if self.accel_axis_for_torque not in df.columns:
             raise ValueError(f"Specified accel_axis_for_torque '{self.accel_axis_for_torque}' not found. Columns: {df.columns.tolist()}")
@@ -118,7 +118,28 @@ class ActuatorDataset(Dataset):
         # The acceleration used here is the one related to the chosen tangential axis, 
         # NOT the one derived from gyro (current_ang_accel_rad_s2_for_target)
         angular_accel_from_tangential_sensor = df[self.accel_axis_for_torque] / self.radius_accel
-        df[self.target_name] = self.inertia * angular_accel_from_tangential_sensor
+        
+        # Apply low-pass filter to the angular acceleration signal if configured
+        if self.filter_cutoff_freq_hz is not None and self.filter_cutoff_freq_hz > 0 and self.sampling_frequency > 0:
+            nyquist_freq = 0.5 * self.sampling_frequency
+            if self.filter_cutoff_freq_hz < nyquist_freq:
+                Wn = self.filter_cutoff_freq_hz / nyquist_freq
+                b, a = butter(self.filter_order, Wn, btype='low', analog=False)
+                
+                # Ensure there are enough data points to filter
+                if len(angular_accel_from_tangential_sensor) > self.filter_order * 3: # Rule of thumb for filtfilt
+                    angular_accel_from_tangential_sensor_filtered = filtfilt(b, a, angular_accel_from_tangential_sensor)
+                    print(f"  Applied Butterworth low-pass filter (cutoff: {self.filter_cutoff_freq_hz} Hz, order: {self.filter_order}) to tangential acceleration for {self.csv_file_path}.")
+                else:
+                    angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # Not enough data, use unfiltered
+                    print(f"  Warning: Not enough data points ({len(angular_accel_from_tangential_sensor)}) to apply Butterworth filter for {self.csv_file_path}. Using unfiltered tangential acceleration.")
+            else:
+                angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # Cutoff is too high, use unfiltered
+                print(f"  Warning: Filter cutoff frequency ({self.filter_cutoff_freq_hz} Hz) is >= Nyquist frequency ({nyquist_freq} Hz) for {self.csv_file_path}. Using unfiltered tangential acceleration.")
+        else:
+            angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # No filter configured or invalid params
+
+        df[self.target_name] = self.inertia * angular_accel_from_tangential_sensor_filtered
 
 
         # 6. Accelerometer Data Processing (Optional features, not part of core input currently)
@@ -225,7 +246,8 @@ if __name__ == '__main__':
             inertia=test_inertia,
             radius_accel=test_radius_accel,
             gyro_axis_for_ang_vel=test_gyro_axis,
-            accel_axis_for_torque=test_accel_axis
+            accel_axis_for_torque=test_accel_axis,
+            filter_cutoff_freq_hz=50.0 # Example for testing
         )
         print(f"Dataset created. Number of sequences: {len(dataset)}")
         X_sample, y_sample = dataset[0]
@@ -246,6 +268,17 @@ if __name__ == '__main__':
         print("\nSample of target 'tau_measured':")
         print(dataset.data_df['tau_measured'].head())
 
+        dataset_no_filter = ActuatorDataset(
+            csv_file_path=dummy_csv_path,
+            inertia=test_inertia,
+            radius_accel=test_radius_accel,
+            gyro_axis_for_ang_vel=test_gyro_axis,
+            accel_axis_for_torque=test_accel_axis,
+            filter_cutoff_freq_hz=None # Test without filter
+        )
+        print(f"Dataset (no filter) created. Number of sequences: {len(dataset_no_filter)}")
+        print(f"Sample target (no filter): {dataset_no_filter.data_df['tau_measured'].head().values}")
+        print(f"Sample target (with 50Hz filter): {dataset.data_df['tau_measured'].head().values}")
 
     except Exception as e:
         print(f"Error during ActuatorDataset test: {e}")

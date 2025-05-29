@@ -50,6 +50,7 @@ The project aims to predict the torque applied by an actuator based on its state
         *   Converts angles from degrees to radians.
         *   Calculates current angular velocity from gyroscope data.
         *   Calculates the target `tau_measured` (measured torque) using the formula `inertia * angular_acceleration_from_tangential_accelerometer`.
+        *   **New**: Optionally applies a low-pass Butterworth filter to the tangential acceleration signal (used to derive `tau_measured`) before torque calculation. This is controlled by `filter_cutoff_freq_hz` and `filter_order` parameters passed from the datamodule, which are configured in `configs/data/default.yaml`. The filter is applied using `scipy.signal.filtfilt`, which performs a forward and backward pass, resulting in a zero-phase (non-causal) filtering operation. This means the filtered signal has no phase distortion and the timing of events in the signal is preserved relative to the original, but it uses future data points for filtering past ones, making it suitable for offline processing like this dataset preparation.
         *   Extracts a fixed set of **3 input features** for the model from the latest timestep of a sequence: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`.
     *   Shapes the data into sequences of a fixed length (`SEQUENCE_LENGTH = 2` by default) suitable for recurrent or time-aware models. The target torque corresponds to the state at the end of the sequence.
     *   **Important**: `ActuatorDataset` returns **raw, unnormalized** feature sequences (`x_sequence`) and target torques (`y_torque`) as PyTorch tensors.
@@ -94,18 +95,6 @@ The project aims to predict the torque applied by an actuator based on its state
 actuator_modeling/
 ├── configs/                   # Hydra configuration files
 │   ├── data/                  # Data module configurations
-│   ├── model/                 # Model configurations (GRU, MLP, etc.)
-│   │   ├── model_type/        # Model-specific configurations
-│   │   └── default.yaml       # Contains ActuatorModel HPs, including physics and TSC params
-│   └── train/                 # Training loop configurations
-│   └── config.yaml            # Main Hydra configuration
-├── data/                      # Placeholder for raw and processed data
-│   └── synthetic_raw/         # Example: Directory for raw synthetic CSVs
-├── scripts/                   # Executable scripts
-│   └── train_model.py         # Main training script
-│   └── generate_synthetic_csv.py # Utility for generating synthetic data (example)
-├── src/                       # Source code for the actuator_modeling package
-│   ├── data/
 │   │   ├── datasets.py        # ActuatorDataset class
 │   │   ├── datamodule.py      # ActuatorDataModule class
 │   │   └── __init__.py
@@ -185,6 +174,9 @@ actuator_modeling/
           - {id: "mass_high", folder: "0.02kgm2", inertia: 0.02}
         ```
     *   Set other relevant parameters like `radius_accel`, `gyro_axis_for_ang_vel`, `accel_axis_for_torque`.
+    *   **New**: Configure target smoothing parameters if desired:
+        *   `filter_cutoff_freq_hz`: (float, optional, default: `null`) Cutoff frequency in Hz for the Butterworth filter applied to the acceleration signal for `tau_measured`. Set to `null` or omit to disable filtering.
+        *   `filter_order`: (int, default: 4) Order of the Butterworth filter if `filter_cutoff_freq_hz` is active.
     *   For "Global Evaluation Mode", configure `global_train_ratio` and `global_val_ratio`.
     *   Ensure `fallback_sampling_frequency` is set if needed (though `ActuatorModel` does not use it directly, `ActuatorDataset` does for its internal calculations).
 

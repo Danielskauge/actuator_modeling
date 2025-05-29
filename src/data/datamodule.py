@@ -36,6 +36,9 @@ class ActuatorDataModule(pl.LightningDataModule):
         global_val_ratio: float = 0.15,
         # global_test_ratio is inferred (1 - train_ratio - val_ratio)
         seed: int = 42, # Seed for reproducible splits (both global and LOMO fold selection if applicable)
+        # Filter parameters for ActuatorDataset
+        filter_cutoff_freq_hz: Optional[float] = None,
+        filter_order: int = 4,
         **kwargs # Catches any other params from Hydra config (e.g. radius_load)
     ):
         super().__init__()
@@ -136,7 +139,9 @@ class ActuatorDataModule(pl.LightningDataModule):
                             radius_accel=self.hparams.radius_accel,
                             gyro_axis_for_ang_vel=self.hparams.gyro_axis_for_ang_vel,
                             accel_axis_for_torque=self.hparams.accel_axis_for_torque,
-                            target_name=self.hparams.target_name
+                            target_name=self.hparams.target_name,
+                            filter_cutoff_freq_hz=self.hparams.filter_cutoff_freq_hz,
+                            filter_order=self.hparams.filter_order
                         )
                         group_datasets.append(dataset_instance)
                         dataset_sampling_frequencies.append(dataset_instance.get_sampling_frequency())
@@ -497,7 +502,9 @@ if __name__ == '__main__':
             num_workers=0,
             global_train_ratio=0.7, 
             global_val_ratio=0.15,
-            seed=123
+            seed=123,
+            filter_cutoff_freq_hz=50.0,
+            filter_order=4
         )
 
         # --- Test Global Split Mode ---
