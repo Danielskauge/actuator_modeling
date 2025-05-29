@@ -78,14 +78,23 @@ class ActuatorDataset(Dataset):
         df = df.sort_index()
         dt_series = df.index.to_series().diff().median().total_seconds()
         if pd.isna(dt_series) or dt_series <= 0:
-             # Fallback if diff().median() fails (e.g. too few data points)
+            # Fallback if diff().median() fails (e.g. too few data points)
             if len(df) > 1:
-                dt_series = (df.index[-1] - df.index[0]).total_seconds() / (len(df) -1)
+                dt_series = (df.index[-1] - df.index[0]).total_seconds() / (len(df) - 1)
+                if dt_series <= 0:
+                    raise ValueError(f"Cannot determine valid sampling period for {self.csv_file_path}. "
+                                   f"Calculated dt_series: {dt_series}. Check time data quality.")
             else:
-                dt_series = 0.01 # Default if only one point, though this case is problematic
-            print(f"Warning: Could not reliably determine dt from time index for {self.csv_file_path}. Using {dt_series:.6f}s. Ensure data is uniformly sampled.")
+                raise ValueError(f"Cannot determine sampling frequency for {self.csv_file_path}. "
+                               f"Only {len(df)} data point(s) available. Need at least 2 points.")
+            print(f"Warning: Could not reliably determine dt from time index for {self.csv_file_path}. "
+                  f"Using average dt = {dt_series:.6f}s. Ensure data is uniformly sampled.")
 
-        self.sampling_frequency = 1.0 / dt_series if dt_series > 0 else 100 # Default 100Hz if dt_series is 0
+        if dt_series <= 0:
+            raise ValueError(f"Invalid sampling period (dt_series = {dt_series}) for {self.csv_file_path}. "
+                           f"Cannot proceed with calculations.")
+        
+        self.sampling_frequency = 1.0 / dt_series
         
         # 2. Angle conversions: Degrees to Radians
         df['current_angle_rad'] = df['Encoder_Angle'] * RAD_PER_DEG
