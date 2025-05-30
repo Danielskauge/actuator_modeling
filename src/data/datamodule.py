@@ -31,6 +31,7 @@ class ActuatorDataModule(pl.LightningDataModule):
         # DataLoader params
         batch_size: int = 32,
         num_workers: int = 4,
+        sequence_duration_s: float = 0.02, # Added: default to 0.02s (2 steps if 100Hz)
         # For Global Split Mode
         global_train_ratio: float = 0.7,
         global_val_ratio: float = 0.15,
@@ -63,7 +64,7 @@ class ActuatorDataModule(pl.LightningDataModule):
 
         # These are now fixed by ActuatorDataset class definition
         self.input_dim = ActuatorDataset.get_input_dim()
-        self.sequence_length = ActuatorDataset.get_sequence_length()
+        self.sequence_length_timesteps: Optional[int] = None # Will be set from first dataset instance
         self.sampling_frequency: Optional[float] = None # Will be determined from the first dataset
 
         # Normalization statistics
@@ -137,6 +138,7 @@ class ActuatorDataModule(pl.LightningDataModule):
                             csv_file_path=csv_file,
                             inertia=group_inertia,
                             radius_accel=self.hparams.radius_accel,
+                            sequence_duration_s=self.hparams.sequence_duration_s, # Pass to dataset
                             gyro_axis_for_ang_vel=self.hparams.gyro_axis_for_ang_vel,
                             accel_axis_for_torque=self.hparams.accel_axis_for_torque,
                             target_name=self.hparams.target_name,
@@ -147,6 +149,9 @@ class ActuatorDataModule(pl.LightningDataModule):
                         dataset_sampling_frequencies.append(dataset_instance.get_sampling_frequency())
                         total_csv_files += 1
                         print(f"    Loaded {os.path.basename(csv_file)}: {len(dataset_instance)} sequences")
+                        # Set sequence_length_timesteps from the first successfully loaded dataset
+                        if self.sequence_length_timesteps is None:
+                            self.sequence_length_timesteps = dataset_instance.get_sequence_length_timesteps()
                     except Exception as e:
                         print(f"    Error loading {csv_file}: {e}")
                         continue
@@ -161,12 +166,15 @@ class ActuatorDataModule(pl.LightningDataModule):
             if not self.datasets_by_group:
                 raise RuntimeError("No datasets were loaded from any inertia group.")
 
+            if self.sequence_length_timesteps is None:
+                raise RuntimeError("Sequence length in timesteps could not be determined from any dataset.")
+
             if dataset_sampling_frequencies:
                 self.sampling_frequency = dataset_sampling_frequencies[0]
                 print(f"DataModule: Base sampling frequency: {self.sampling_frequency:.2f} Hz")
             
             print(f"DataModule: Loaded {total_csv_files} CSV files from {len(self.datasets_by_group)} inertia groups.")
-            print(f"  Input dim: {self.input_dim}, Sequence length: {self.sequence_length}")
+            print(f"  Input dim: {self.input_dim}, Sequence length (timesteps): {self.sequence_length_timesteps}")
 
     def prepare_data(self):
         # This ensures data (CSVs) are accessible.
@@ -420,7 +428,10 @@ class ActuatorDataModule(pl.LightningDataModule):
 
     # Accessors for model to get necessary dimensions
     def get_input_dim(self) -> int: return self.input_dim
-    def get_sequence_length(self) -> int: return self.sequence_length
+    def get_sequence_length_timesteps(self) -> int:
+        if self.sequence_length_timesteps is None:
+            raise RuntimeError("Sequence length in timesteps has not been set. Ensure data is loaded.")
+        return self.sequence_length_timesteps
     def get_sampling_frequency(self) -> Optional[float]: return self.sampling_frequency
     def get_num_lomo_folds(self) -> int:
         # self._load_all_datasets_once() # Called in prepare_data

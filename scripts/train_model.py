@@ -13,7 +13,7 @@ import json # For saving config summary
 from src.data.datamodule import ActuatorDataModule
 from src.models.model import ActuatorModel
 from src.utils.callbacks import TestPredictionPlotter, EarlySummary # Assuming these exist and are compatible
-from src.data.datasets import ActuatorDataset # To get SEQUENCE_LENGTH
+# from src.data.datasets import ActuatorDataset # No longer needed for SEQUENCE_LENGTH
 
 from typing import Tuple, Optional # For CustomEarlyStopping type hints
 
@@ -23,6 +23,9 @@ def _export_model_to_jit(
     model_class: type, # Should be ActuatorModel
     jit_filename: str,
     output_dir: str,
+    # Add model_example_inputs for tracing if method=\"trace\" might be used
+    # For method=\"script\", it's not strictly necessary but good for consistency.
+    model_example_input: Optional[Tuple[torch.Tensor, Optional[torch.Tensor]]] = None,
     wandb_logger: Optional[WandbLogger] = None,
     run_name_for_artifact: Optional[str] = None
 ):
@@ -33,13 +36,34 @@ def _export_model_to_jit(
 
     print(f"\nExporting model from {checkpoint_path} to TorchScript (JIT)...")
     try:
-        model_to_jit = model_class.load_from_checkpoint(checkpoint_path)
+        # model_to_jit = model_class.load_from_checkpoint(checkpoint_path) #This might not pass hparams correctly after pl update
+        # Prefer instantiating model then loading state_dict for robustness
+        # First, load the hparams from the checkpoint to instantiate the model correctly.
+        ckpt = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
+        hparams = ckpt.get('hyper_parameters')
+        if hparams is None:
+            raise ValueError("Hyperparameters not found in checkpoint.")
+        
+        # Instantiate model with hparams from checkpoint
+        model_to_jit = model_class(**hparams)
+        model_to_jit.load_state_dict(ckpt['state_dict'])
         model_to_jit.eval() # Ensure model is in eval mode
 
         jit_model_path = os.path.join(output_dir, jit_filename)
         os.makedirs(os.path.dirname(jit_model_path), exist_ok=True) # Ensure dir exists
 
-        scripted_model = model_to_jit.to_torchscript(method="script")
+        # For script=True, example_inputs are not strictly needed for the .to_torchscript() call itself,
+        # but if you were to use method='trace', they would be essential.
+        # Providing them for script mode doesn't hurt and makes the export function more general.
+        if model_example_input:
+            scripted_model = torch.jit.script(model_to_jit, example_inputs=[model_example_input])
+        else:
+            # If no example input, assume the model's forward can be scripted without one
+            # This relies on the model's forward signature being clear to the scripter.
+            # For models with Optional inputs or complex Tuple outputs, providing example_inputs is safer.
+            print("Warning: No example_input provided for JIT scripting. Proceeding without it.")
+            scripted_model = torch.jit.script(model_to_jit)
+            
         torch.jit.save(scripted_model, jit_model_path)
         print(f"Model successfully exported to TorchScript: {jit_model_path}")
 
@@ -174,7 +198,7 @@ def train_actuator_model(cfg: DictConfig) -> None:
             "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
             "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
             "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
-            "gru_sequence_length": ActuatorDataset.get_sequence_length(), # From dataset class
+            "gru_sequence_length_timesteps": datamodule.get_sequence_length_timesteps(), # Updated
             "input_dim": datamodule.get_input_dim()
         }
         with open(os.path.join(output_dir_global, "training_config_summary.json"), 'w') as f:
@@ -254,11 +278,33 @@ def train_actuator_model(cfg: DictConfig) -> None:
         # --- Export JIT model for global run ---
         if cfg.train.get("export_jit_model", False):
             if checkpoint_callback_global and checkpoint_callback_global.best_model_path:
+                # Create example input for JIT scripting/tracing based on the model's new forward signature
+                # (x, h_prev) -> (y, h_next)
+                # x shape: (batch_size, seq_len, input_dim)
+                # h_prev shape: (num_layers, batch_size, hidden_dim) or None
+                example_batch_size = 1 # For inference, usually batch size is 1
+                example_seq_len = datamodule.get_sequence_length_timesteps() # Use training sequence length for example
+                example_input_dim = datamodule.get_input_dim()
+                example_gru_num_layers = model_global.hparams.gru_num_layers
+                example_gru_hidden_dim = model_global.hparams.gru_hidden_dim
+
+                example_x = torch.randn(example_batch_size, example_seq_len, example_input_dim)
+                example_h_prev_tensor = torch.randn(example_gru_num_layers, example_batch_size, example_gru_hidden_dim)
+                
+                # JIT needs a list of tuples if multiple example inputs are to be tested, or one tuple for one call signature
+                # For a single forward signature like forward(self, x, h_prev=None)
+                # we can provide one example call with h_prev as a tensor, and one with h_prev as None.
+                # However, torch.jit.script might be able to infer Optional better.
+                # Let's provide one example where h_prev is a tensor.
+                # The JIT scripter should then understand that h_prev can also be None.
+                example_model_input_for_jit = (example_x, example_h_prev_tensor)
+
                 _export_model_to_jit(
                     checkpoint_path=checkpoint_callback_global.best_model_path,
                     model_class=ActuatorModel,
                     jit_filename=f"{run_name_global}_best_jit.pt",
                     output_dir=cfg.outputs_dir, # Save in the root of the run's output dir
+                    model_example_input=example_model_input_for_jit, # Pass example for scripting
                     wandb_logger=wandb_logger_global,
                     run_name_for_artifact=run_name_global
                 )
@@ -314,7 +360,7 @@ def train_actuator_model(cfg: DictConfig) -> None:
                 "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
                 "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
                 "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
-                "gru_sequence_length": ActuatorDataset.get_sequence_length(),
+                "gru_sequence_length_timesteps": datamodule.get_sequence_length_timesteps(), # Updated
                 "input_dim": datamodule.get_input_dim()
             }
             with open(os.path.join(output_dir_fold_stats, "training_config_summary.json"), 'w') as f:
@@ -395,13 +441,24 @@ def train_actuator_model(cfg: DictConfig) -> None:
             # --- Export JIT model for LOMO CV fold ---
             if cfg.train.get("export_jit_model", False):
                 if checkpoint_callback_fold and checkpoint_callback_fold.best_model_path:
-                    # Save JIT model in a 'jit_models' subfolder within the fold's checkpoint directory
+                    # Create example input for JIT scripting/tracing for the fold model
+                    example_batch_size_fold = 1 
+                    example_seq_len_fold = datamodule.get_sequence_length_timesteps()
+                    example_input_dim_fold = datamodule.get_input_dim()
+                    example_gru_num_layers_fold = model_fold.hparams.gru_num_layers
+                    example_gru_hidden_dim_fold = model_fold.hparams.gru_hidden_dim
+
+                    example_x_fold = torch.randn(example_batch_size_fold, example_seq_len_fold, example_input_dim_fold)
+                    example_h_prev_tensor_fold = torch.randn(example_gru_num_layers_fold, example_batch_size_fold, example_gru_hidden_dim_fold)
+                    example_model_input_for_jit_fold = (example_x_fold, example_h_prev_tensor_fold)
+
                     fold_jit_output_dir = os.path.join(cfg.outputs_dir, "checkpoints", f"fold_{fold_idx + 1}", "jit_models")
                     _export_model_to_jit(
                         checkpoint_path=checkpoint_callback_fold.best_model_path,
                         model_class=ActuatorModel,
                         jit_filename=f"{run_name_fold}_best_jit.pt",
                         output_dir=fold_jit_output_dir,
+                        model_example_input=example_model_input_for_jit_fold, # Pass example for scripting
                         wandb_logger=wandb_logger_fold,
                         run_name_for_artifact=run_name_fold
                     )

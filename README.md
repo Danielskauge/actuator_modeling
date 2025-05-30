@@ -23,19 +23,20 @@ This project focuses on developing and evaluating models to predict joint torque
 6.  [Key Design Choices](#key-design-choices)
     *   [PyTorch Lightning](#pytorch-lightning)
     *   [Hydra for Configuration](#hydra-for-configuration)
+    *   [Stateful GRU for Time-Series Modeling](#stateful-gru-for-time-series-modeling)
     *   [Two-Stage Evaluation Strategy](#two-stage-evaluation-strategy)
     *   [Feature Engineering in `ActuatorDataset`](#feature-engineering-in-actuatordataset)
     *   [Residual Modeling in `ActuatorModel`](#residual-modeling-in-actuatormodel)
-    *   [Normalization Strategy in `ActuatorModel`](#normalization-strategy-in-actuatormodel)
+    *   [Normalization Strategy](#normalization-strategy)
     *   [Asymmetric Torque-Speed Curve (TSC)](#asymmetric-torque-speed-curve-tsc)
-    *   [Deployment Considerations](#deployment-considerations)
+    *   [Deployment to Isaac Lab Actuator](#deployment-to-isaac-lab-actuator)
 7.  [Future Work and Extensions](#future-work-and-extensions)
 
 ## 1. Project Overview
 
 The project aims to predict the torque applied by an actuator based on its state variables. This involves:
 *   Processing raw sensor data from actuator experiments.
-*   Defining GRU neural network architectures to learn torque dynamics.
+*   Defining stateful GRU neural network architectures to learn torque dynamics over time.
 *   Implementing a flexible training and evaluation pipeline.
 *   Rigorously evaluating model performance, both on data similar to training conditions and on data from unseen physical conditions (specifically, different inertias).
 
@@ -44,49 +45,53 @@ The project aims to predict the torque applied by an actuator based on its state
 ### Data Processing
 
 *   **`src/data/datasets.py:ActuatorDataset`**:
-    *   Loads raw data from individual CSV files, each typically representing an experiment with a specific actuator mass/inertia.
+    *   Loads raw data from individual CSV files.
     *   Performs crucial preprocessing and feature engineering:
-        *   Converts time from milliseconds to seconds and determines sampling frequency.
-        *   Converts angles from degrees to radians.
-        *   Calculates current angular velocity from gyroscope data.
-        *   Calculates the target `tau_measured` (measured torque) using the formula `inertia * angular_acceleration_from_tangential_accelerometer`.
-        *   **New**: Optionally applies a low-pass Butterworth filter to the tangential acceleration signal (used to derive `tau_measured`) before torque calculation. This is controlled by `filter_cutoff_freq_hz` and `filter_order` parameters passed from the datamodule, which are configured in `configs/data/default.yaml`. The filter is applied using `scipy.signal.filtfilt`, which performs a forward and backward pass, resulting in a zero-phase (non-causal) filtering operation. This means the filtered signal has no phase distortion and the timing of events in the signal is preserved relative to the original, but it uses future data points for filtering past ones, making it suitable for offline processing like this dataset preparation.
-        *   Extracts a fixed set of **3 input features** for the model from the latest timestep of a sequence: `current_angle_rad`, `target_angle_rad`, and `current_ang_vel_rad_s`.
-    *   Shapes the data into sequences of a fixed length (`SEQUENCE_LENGTH = 2` by default) suitable for recurrent or time-aware models. The target torque corresponds to the state at the end of the sequence.
-    *   **Important**: `ActuatorDataset` returns **raw, unnormalized** feature sequences (`x_sequence`) and target torques (`y_torque`) as PyTorch tensors.
-    *   Provides static methods `get_input_dim()` (returns 3) and `get_sequence_length()` (returns 2 by default) for consistent model initialization.
+        *   Calculates sampling frequency, converts units.
+        *   Calculates `tau_measured` (target torque).
+        *   Optionally applies a Butterworth filter to the acceleration signal used for `tau_measured`.
+        *   Extracts **3 input features**: `current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`.
+    *   Shapes data into sequences. The length of these sequences (`sequence_length_timesteps`) is now configurable via `sequence_duration_s` (e.g., 1.0 seconds) and the dataset's calculated `sampling_frequency`.
+    *   Returns raw, unnormalized feature sequences and target torques.
+    *   Provides `get_input_dim()` (static) and `get_sequence_length_timesteps()` (instance method).
 
 *   **`src/data/datamodule.py:ActuatorDataModule`**:
-    *   A PyTorch Lightning `LightningDataModule` orchestrating `ActuatorDataset`.
-    *   Loads multiple CSVs per inertia group (defined by `id`, `folder`, `inertia`).
-    *   **Normalization Strategy**: Computes normalization statistics (mean, std) for input features and target torque. These statistics are crucial for `ActuatorModel` and are saved by the training script (`scripts/train_model.py`) to a human-readable `normalization_stats.json` file for each run/fold. `ActuatorDataModule` itself calculates these stats based on:
-        *   **Global Run Mode**: Stats from the `global_train_dataset`.
-        *   **LOMO CV Fold Mode**: Stats independently from each fold's `current_fold_train_dataset` (excluding held-out data) to prevent leakage.
-    *   Provides `get_input_normalization_stats()` and `get_target_normalization_stats()`.
-    *   Supports two setup modes: `setup_for_global_run` and `setup_for_lomo_fold`.
+    *   Orchestrates `ActuatorDataset` instances.
+    *   Configurable via `sequence_duration_s` in `configs/data/default.yaml`, which is passed to `ActuatorDataset`.
+    *   Determines and stores `sequence_length_timesteps` and `sampling_frequency` from the first loaded dataset instance.
+    *   Computes and provides normalization statistics (mean, std) for inputs and targets, crucial for the `ActuatorModel`. These are saved to `normalization_stats.json`.
 
 ### Model Architectures
 
-*   **`src/models/gru.py:GRUModel`**: Standard GRU network.
+*   **`src/models/gru.py:GRUModel`**:
+    *   A standard `nn.GRU` wrapped in an `nn.Module`.
+    *   **Stateful Forward Pass**: Its `forward` method is now `forward(x, h_prev=None) -> (prediction, h_next)`.
+        *   `x`: Input sequence tensor `(batch, seq_len, features)`.
+        *   `h_prev`: Optional previous hidden state `(num_layers, batch, hidden_dim)`. If `None`, it's initialized to zeros.
+        *   Returns `prediction` `(batch, output_dim)` (from the last time step of the sequence) and `h_next` `(num_layers, batch, hidden_dim)`.
+
 *   **`src/models/model.py:ActuatorModel`**:
-    *   The main `LightningModule`, wrapping GRU.
-    *   Receives `input_dim` (3) and normalization statistics from `ActuatorDataModule`.
+    *   The main `LightningModule`, wrapping `GRUModel`.
+    *   **Stateful Forward Pass**: Mirrors `GRUModel`'s stateful signature: `forward(x, h_prev=None) -> (prediction, h_next)`.
+    *   **Training**: During `training_step`, `validation_step`, and `test_step`:
+        *   The `forward` method is called with `h_prev=None` (or the hidden state is implicitly managed by `nn.GRU` if the input `x` is a sequence). The returned `h_next` is typically ignored for loss calculation within these steps, as state propagation *between batches* is not standard. The stateful signature is primarily for ensuring the JIT-exported model can be used statefully during inference.
     *   Detailed behavior regarding residual modeling, normalization, and Torque-Speed Curve (TSC) is described in [Key Design Choices](#key-design-choices).
 
 ### Training and Evaluation
 
 *   **`scripts/train_model.py`**: Main Hydra-driven training script.
     *   Instantiates `ActuatorDataModule` and `ActuatorModel`.
-    *   Passes normalization stats from datamodule to model.
+    *   Retrieves `sequence_length_timesteps` from the datamodule for logging purposes (e.g., in `training_config_summary.json`).
+    *   Passes normalization stats from datamodule to the model.
     *   Manages evaluation strategy (`global` or `lomo_cv`).
+    *   **JIT Export**: Exports the trained `ActuatorModel` to TorchScript. The exported model will have the stateful `forward(x, h_prev)` signature, making it suitable for continuous, stateful inference.
 
 ### Configuration Management
 
 *   **Hydra (`configs/`)**:
-    *   `configs/config.yaml`: Main configuration.
-    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`.
-    *   `configs/model/default.yaml`: Configures `ActuatorModel`. Includes parameters for the physics-based model (`k_spring`, `theta0`, `kp_phys`, `kd_phys`) and, critically, the new parameters for the optional Torque-Speed Curve (TSC) applied to the PD component during training: `pd_stall_torque_phys_training` and `pd_no_load_speed_phys_training`.
-    *   `configs/train/default.yaml`: Training loop settings.
+    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`, including the new `sequence_duration_s` parameter.
+    *   `configs/model/default.yaml`: Configures `ActuatorModel`.
+    *   The `training_config_summary.json` output now includes `gru_sequence_length_timesteps`.
 
 ## 3. Codebase Structure
 
@@ -177,6 +182,7 @@ actuator_modeling/
         *   `filter_order`: (int, default: 4) Order of the Butterworth filter if `filter_cutoff_freq_hz` is active.
     *   For "Global Evaluation Mode", configure `global_train_ratio` and `global_val_ratio`.
     *   Ensure `fallback_sampling_frequency` is set if needed (though `ActuatorModel` does not use it directly, `ActuatorDataset` does for its internal calculations).
+    *   **New/Updated**: Configure `sequence_duration_s` (e.g., `1.0` for 1-second sequences). The actual number of timesteps per sequence will be `sequence_duration_s * sampling_frequency`.
 
 ### Training Modes
 
@@ -257,6 +263,10 @@ After training, the best model checkpoint can be automatically exported to a Tor
 
 *   **PyTorch Lightning**: Simplifies training code, enables multi-GPU, checkpointing, logging.
 *   **Hydra for Configuration**: Flexible management of data, model, training parameters.
+*   **Stateful GRU for Time-Series Modeling**:
+    *   The core `GRUModel` and the encapsulating `ActuatorModel` are designed to be stateful. Their `forward` methods accept a previous hidden state and return the prediction along with the next hidden state: `(prediction, h_next) = model.forward(x, h_prev)`.
+    *   **Training**: For training, sequences of `sequence_length_timesteps` (e.g., 1 second of data) are fed to the model. The `nn.GRU` layer internally propagates the hidden state across the timesteps *within* that sequence. The explicit `h_prev` argument to `ActuatorModel.forward` is typically `None` at the start of processing a batch/sequence during training steps, relying on the `nn.GRU`'s internal handling or default zero initialization.
+    *   **Inference**: The JIT-exported model retains this stateful signature. This allows external components, like the `CombinedGRUAndPDActuator` in Isaac Lab, to manage the hidden state explicitly from one inference call (e.g., one simulation step) to the next, enabling continuous memory.
 *   **Two-Stage Evaluation Strategy**: `global` mode for overall learning, `lomo_cv` for generalization to unseen inertias with fold-specific normalization.
 *   **Feature Engineering in `ActuatorDataset`**: Centralized calculation of 3 core input features (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`) in a **defined order** as specified by `ActuatorDataset.FEATURE_NAMES`. This order is critical as it's implicitly used for calculating and applying normalization statistics and by the input layer of models, including the deployed `CombinedGRUAndPDActuator`. Raw, unnormalized data is passed to `ActuatorDataModule`.
 
@@ -273,7 +283,7 @@ After training, the best model checkpoint can be automatically exported to a Tor
         *   Final `tau_phys` (physical units): `saturated_tau_pd_only` (if TSC applied, else raw `tau_pd_only`) + `tau_spring_comp`.
     *   This `tau_phys` is then normalized for calculating the residual target.
 
-*   **Normalization Strategy in `ActuatorModel`**:
+*   **Normalization Strategy**:
     *   **Input Normalization**: Raw input sequences `x` from `ActuatorDataset` are normalized using `input_mean` and `input_std` (from `ActuatorDataModule`) before being fed into the neural network.
     *   **Neural Network Output**: The direct output of the neural network (`y_hat_model_output_normalized`) is always in the normalized scale.
     *   **Target Normalization for Loss**: The raw target torque `y_measured_torque_raw` is normalized to `y_target_for_loss_normalized` using `target_mean` and `target_std`.
@@ -299,10 +309,18 @@ After training, the best model checkpoint can be automatically exported to a Tor
         *   The maximum torque it can produce *in the direction opposing that motion* (braking) is limited by the full `stall_torque`.
     *   At zero speed, the motor can apply up to `stall_torque` in either direction.
 
-*   **Deployment Considerations (Connection to Isaac Lab Actuator)**:
-    *   The parameters configured in `ActuatorModel` for the physics-based component (`kp_phys`, `kd_phys`, `k_spring`, `theta0`), its optional TSC (`pd_stall_torque_phys_training`, `pd_no_load_speed_phys_training`), GRU architecture (`gru_num_layers`, `gru_hidden_dim`, `gru_sequence_length`), and other vital details like `use_residual` and `input_dim` are saved in the `training_config_summary.json` during the training pipeline.
-    *   The Isaac Lab actuator class (e.g., `CombinedGRUAndPDActuator`) reads this `training_config_summary.json`. If `use_residual` is true in the summary, the Isaac Lab actuator replicates the same analytical base model by using these parameters from the summary. This includes applying the same TSC to its PD component *before* adding spring torque.
-    *   Crucially, `CombinedGRUAndPDActuator` also loads the corresponding `normalization_stats.json` file. These statistics (input means and standard deviations) are used to normalize the input features (current angle, target angle, current angular velocity) before feeding them to its GRU component. This ensures that the data seen by the GRU at deployment time is processed in the exact same way as during training. The order of features in the `normalization_stats.json` (derived from `ActuatorDataset.FEATURE_NAMES`) must align with how `CombinedGRUAndPDActuator` constructs its input sequence for the GRU.
+*   **Deployment to Isaac Lab Actuator (`CombinedGRUAndPDActuator`)**:
+    *   The `CombinedGRUAndPDActuator` is designed to work with the JIT-exported stateful `ActuatorModel`.
+    *   **Stateful Inference Loop**:
+        1.  At each simulation step, the actuator prepares a **single time-step input** for the GRU: `current_step_input` of shape `(batch_size_effective, 1, num_input_features)`. `batch_size_effective` is typically `num_envs * num_joints`.
+        2.  This `current_step_input` is normalized using the loaded `input_mean` and `input_std` from `normalization_stats.json`.
+        3.  The normalized input is passed to the JIT model along with the currently stored hidden state: `prediction_normalized, h_next = jit_model(normalized_input, self.sea_hidden_state)`.
+        4.  The actuator updates its stored hidden state: `self.sea_hidden_state = h_next`.
+        5.  The `prediction_normalized` is then denormalized (if `use_residual=False`) or used to compute the total torque (if `use_residual=True` by adding to the normalized `tau_phys`).
+    *   **Configuration Files**:
+        *   `training_config_summary.json`: Still critical. It provides `gru_num_layers`, `gru_hidden_dim`, parameters for the residual physics model (`kp_phys`, `kd_phys`, etc., if `use_residual=True`), and `gru_sequence_length_timesteps` (which informs about the training context of the hidden state).
+        *   `normalization_stats.json`: Essential for normalizing the single time-step inputs at inference time to match the training distribution. The order of features defined in `ActuatorDataset.FEATURE_NAMES` and reflected in this file must be strictly adhered to by the actuator when constructing its input.
+    *   The `gru_sequence_length` parameter in `CombinedGRUAndPDActuatorCfg` now serves primarily as a reference to the sequence length the model was trained with, ensuring consistency in understanding the model's architecture, rather than dictating the input shape for per-step inference (which is always 1).
 
 ## 7. Future Work and Extensions
 

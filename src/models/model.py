@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 
 import torch
 import torch.nn as nn # Added for nn.GRU
@@ -125,12 +125,16 @@ class ActuatorModel(pl.LightningModule):
         for name, metric in self.test_metrics.items():
             self.test_metrics[name] = metric.to(device)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, h_prev: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass through the GRU model.
-        x shape: [batch_size, seq_len, input_dim] -> output [batch_size, 1]
+        Forward pass through the GRU model, now stateful.
+        x shape: [batch_size, seq_len, input_dim]
+        h_prev shape: [num_layers, batch_size, hidden_dim]
+        Returns: 
+            prediction: [batch_size, output_dim] (typically output_dim=1)
+            h_next: [num_layers, batch_size, hidden_dim]
         """
-        return self.model(x)
+        return self.model(x, h_prev)
 
     def _apply_tsc_to_pd_component(self, pd_joint_torque: torch.Tensor, joint_vel: torch.Tensor) -> torch.Tensor:
         """
@@ -227,7 +231,11 @@ class ActuatorModel(pl.LightningModule):
         x_normalized = (x - mean_x) / (std_x + 1e-7) # Epsilon for stability
 
         # 2. Model makes prediction using normalized inputs. Output is in normalized scale.
-        y_hat_model_output_normalized = self(x_normalized).squeeze(-1) # Output shape: [batch]
+        # For training/val/test steps, we don't pass or use the hidden state between batches here.
+        # The GRU layer itself handles hidden state propagation *within* the input sequence x.
+        # The forward signature change is primarily for the JIT export to support stateful inference.
+        y_hat_model_output_normalized, _ = self(x_normalized) # h_prev is None, h_next is ignored here
+        y_hat_model_output_normalized = y_hat_model_output_normalized.squeeze(-1) # Output shape: [batch]
 
         # 3. Normalize the raw target torque for loss calculation
         # target_mean/std are likely (1,) or scalar. Ensure they broadcast with y_measured_torque_raw [batch]

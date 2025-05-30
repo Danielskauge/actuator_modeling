@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from typing import Tuple, Optional # Added Tuple, Optional
 
 class GRUModel(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, num_layers: int, output_dim: int = 1, dropout: float = 0.1):
@@ -16,20 +17,26 @@ class GRUModel(nn.Module):
         )
         self.fc = nn.Linear(hidden_dim, output_dim)
         
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, h_prev: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # x shape: (batch_size, seq_len, input_dim)
-        # h0 shape: (num_layers, batch_size, hidden_dim)
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        # h_prev shape: (num_layers, batch_size, hidden_dim)
+        
+        if h_prev is None:
+            # Initialize hidden state if not provided
+            h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        else:
+            h0 = h_prev
         
         # GRU output: (batch_size, seq_len, hidden_dim)
         # hn output: (num_layers, batch_size, hidden_dim)
-        out, _ = self.gru(x, h0)
+        gru_out, h_next = self.gru(x, h0)
         
         # We only want the output from the last time step for prediction
+        # If x is a single time step (seq_len=1), out[:, -1, :] correctly takes that step's output.
         # out shape: (batch_size, hidden_dim)
-        out = out[:, -1, :] 
+        out_last_step = gru_out[:, -1, :] 
         
         # Pass through the fully connected layer
         # out shape: (batch_size, output_dim)
-        out = self.fc(out)
-        return out 
+        prediction = self.fc(out_last_step)
+        return prediction, h_next 

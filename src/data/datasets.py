@@ -4,6 +4,7 @@ import pandas as pd
 from torch.utils.data import Dataset
 from typing import Tuple, List, Dict, Any, Optional
 from scipy.signal import butter, filtfilt
+import os
 
 # Constants
 RAD_PER_DEG = np.pi / 180.0
@@ -25,13 +26,13 @@ class ActuatorDataset(Dataset):
         # 'target_ang_vel_rad_s' # Removed as per user request
     ]
     INPUT_DIM = len(FEATURE_NAMES) # Should be 3 now
-    SEQUENCE_LENGTH = 2
 
     def __init__(
         self,
         csv_file_path: str,
         inertia: float,
         radius_accel: float,
+        sequence_duration_s: float, # Added: desired sequence duration in seconds
         gyro_axis_for_ang_vel: str = 'Gyro_Z',
         accel_axis_for_torque: str = 'Acc_Y',
         target_name: str = 'tau_measured',
@@ -43,6 +44,7 @@ class ActuatorDataset(Dataset):
             csv_file_path: Path to the CSV data file.
             inertia: Inertia of the system (kg*m^2).
             radius_accel: Radius to the point where tangential acceleration is measured by accel_axis_for_torque (meters).
+            sequence_duration_s: Desired sequence duration in seconds.
             gyro_axis_for_ang_vel: Gyroscope axis ('Gyro_X', 'Gyro_Y', 'Gyro_Z') for signed angular velocity.
             accel_axis_for_torque: Accelerometer axis ('Acc_X', 'Acc_Y', 'Acc_Z') for tangential acceleration.
             target_name: Name of the target column to predict.
@@ -59,6 +61,16 @@ class ActuatorDataset(Dataset):
         self.filter_order = filter_order
 
         self.data_df = self._load_and_preprocess_data()
+        
+        # Calculate sequence length in timesteps
+        if self.sampling_frequency is None or self.sampling_frequency <= 0:
+            raise ValueError("Sampling frequency not determined or invalid, cannot calculate sequence length.")
+        self.sequence_length_timesteps = int(round(sequence_duration_s * self.sampling_frequency))
+        if self.sequence_length_timesteps < 1:
+            raise ValueError(f"Calculated sequence_length_timesteps ({self.sequence_length_timesteps}) is less than 1. "
+                             f"Duration: {sequence_duration_s}s, Fs: {self.sampling_frequency}Hz. Increase duration or check data.")
+        print(f"  Dataset {os.path.basename(csv_file_path)}: sequence_duration_s={sequence_duration_s}s, sampling_frequency={self.sampling_frequency:.2f}Hz -> sequence_length_timesteps={self.sequence_length_timesteps}")
+
         self.X_sequences, self.y_sequences = self._create_sequences()
 
     def _load_and_preprocess_data(self) -> pd.DataFrame:
@@ -171,17 +183,17 @@ class ActuatorDataset(Dataset):
         feature_data = self.data_df[self.FEATURE_NAMES].values
         target_data = self.data_df[self.target_name].values
 
-        num_samples = len(feature_data) - self.SEQUENCE_LENGTH + 1
+        num_samples = len(feature_data) - self.sequence_length_timesteps + 1
         
         if num_samples <= 0:
             raise ValueError(
                 f"Not enough data points ({len(feature_data)}) to create sequences "
-                f"of length {self.SEQUENCE_LENGTH} for file {self.csv_file_path}."
+                f"of length {self.sequence_length_timesteps} for file {self.csv_file_path}."
             )
 
-        X = np.array([feature_data[i : i + self.SEQUENCE_LENGTH] for i in range(num_samples)])
+        X = np.array([feature_data[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
         # The target corresponds to the state at the *end* of the sequence
-        y = np.array([target_data[i + self.SEQUENCE_LENGTH - 1] for i in range(num_samples)])
+        y = np.array([target_data[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
         
         return torch.from_numpy(X).float(), torch.from_numpy(y).float().unsqueeze(1) # Target shape: [num_samples, 1]
 
@@ -198,9 +210,9 @@ class ActuatorDataset(Dataset):
     def get_input_dim() -> int:
         return ActuatorDataset.INPUT_DIM
 
-    @staticmethod
-    def get_sequence_length() -> int:
-        return ActuatorDataset.SEQUENCE_LENGTH
+    def get_sequence_length_timesteps(self) -> int:
+        """Returns the actual sequence length in timesteps for this dataset instance."""
+        return self.sequence_length_timesteps
 
 if __name__ == '__main__':
     # --- Example Usage ---
@@ -245,15 +257,15 @@ if __name__ == '__main__':
     test_radius_accel = 0.2 # m
     test_gyro_axis = 'Gyro_Z'
     test_accel_axis = 'Acc_Y'
-    # Sequence length should be fs * 1s. If fs=100Hz, then sequence_length = 100.
-    # For this dummy data, dt is 0.01s, so fs = 100 Hz.
-    test_sequence_length = int(fs_test * 1.0) # 1 second sequences
+    # test_sequence_length = int(fs_test * 1.0) # 1 second sequences # Old way
+    test_sequence_duration_s = 1.0 # New: 1 second sequence duration
 
     try:
         dataset = ActuatorDataset(
             csv_file_path=dummy_csv_path,
             inertia=test_inertia,
             radius_accel=test_radius_accel,
+            sequence_duration_s=test_sequence_duration_s, # New parameter
             gyro_axis_for_ang_vel=test_gyro_axis,
             accel_axis_for_torque=test_accel_axis,
             filter_cutoff_freq_hz=50.0 # Example for testing
@@ -264,6 +276,7 @@ if __name__ == '__main__':
         print(f"Sample y shape: {y_sample.shape}")   # Expected: (1,) or (1,1)
         print(f"Input Dim for model should be: {X_sample.shape[1]}")
         print(f"Sampling frequency from dataset: {dataset.get_sampling_frequency()} Hz")
+        print(f"Sequence length in timesteps from dataset: {dataset.get_sequence_length_timesteps()}") # Updated call
 
         # Check feature order for tau_phys (first 4 are critical for indexing in model)
         print("\nFeature names in order from dataset (X_sample.shape[1]):")
@@ -281,6 +294,7 @@ if __name__ == '__main__':
             csv_file_path=dummy_csv_path,
             inertia=test_inertia,
             radius_accel=test_radius_accel,
+            sequence_duration_s=test_sequence_duration_s, # New parameter
             gyro_axis_for_ang_vel=test_gyro_axis,
             accel_axis_for_torque=test_accel_axis,
             filter_cutoff_freq_hz=None # Test without filter
@@ -295,7 +309,6 @@ if __name__ == '__main__':
         traceback.print_exc()
     finally:
         # Clean up dummy file
-        import os
         if os.path.exists(dummy_csv_path):
             os.remove(dummy_csv_path)
             print(f"Cleaned up {dummy_csv_path}")
