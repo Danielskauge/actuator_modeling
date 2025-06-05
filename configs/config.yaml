@@ -25,28 +25,3 @@ wandb:
   watch_log_freq: 100
   # tags: ["${model.model_type}", "lomo_cv"]
   # log_model: "all" # 'all', 'best', or false
-
-# --- LOMO CV specific ---
-# The number of folds will be determined by the length of data.dataset_configs in the training script.
-# The script will loop from fold_idx = 0 to num_folds - 1.
-
-# --- For `scripts/generate_synthetic_csv.py` (if we make it Hydra-configurable) ---
-# synthetic_data_generation:
-#   output_dir: "${work_dir}/data/synthetic/"
-#   num_files: 3
-#   num_rows_per_file: 1000
-#   fs: 100 # Hz
-#   # PD controller params for generation
-#   kp_gen: 5.0
-#   kd_gen: 0.1
-#   inertia_gen_base: 0.01 # Will be varied per file
-#   # Trajectory params
-#   amp_target: 0.785 # pi/4 radians
-#   freq_target_base: 0.5 # Hz, will be varied
-#   # Spring params for generated data
-#   k_spring_gen: 0.0
-#   theta0_gen: 0.0
-#   # Noise
-#   noise_torque_std: 0.05
-#   # Accelerometer specific for generation
-#   radius_gen: 0.05 # meters, for generating Acc_X data 

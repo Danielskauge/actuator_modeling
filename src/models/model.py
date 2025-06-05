@@ -40,7 +40,7 @@ class ActuatorModel(pl.LightningModule):
         theta0: float = 0.0,
         kp_phys: float = 0.0,
         kd_phys: float = 0.0,
-        loss_diff_weight: float = 0.1,
+        loss_diff_weight: float = 0.0,
         warmup_epochs: int = 1,
         pd_stall_torque_phys_training: float | None = None, # Added for TSC during training
         pd_no_load_speed_phys_training: float | None = None, # Added for TSC during training
@@ -216,12 +216,14 @@ class ActuatorModel(pl.LightningModule):
         tau_phys = tau_spring_comp + saturated_tau_pd_only
         return tau_phys.unsqueeze(1) # Shape [batch_size, 1]
 
-    def step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int, stage: str) -> Dict[str, torch.Tensor]:
+    def step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int, stage: str) -> Dict[str, torch.Tensor]:
         """
         General step function for training, validation, and testing.
+        Now expects batch to include timestamps.
         """
-        x, y_measured_torque_raw = batch # x raw, y_measured_torque_raw is in physical units
-        y_measured_torque_raw = y_measured_torque_raw.squeeze(-1) # Shape [batch]
+        x, y_measured_torque_raw, timestamps = batch # x raw, y_measured_torque_raw is in physical units, timestamps are floats
+        y_measured_torque_raw = y_measured_torque_raw.squeeze(-1) # Shape [batch] #TODO needs update for many-to-many formulation
+        timestamps = timestamps.squeeze(-1) # Shape [batch]
 
         # 1. Normalize inputs (x)
         # Ensure input_mean and input_std are correctly shaped for broadcasting over (batch, seq_len, features)
@@ -287,18 +289,24 @@ class ActuatorModel(pl.LightningModule):
             # Log the mean absolute value of the ORIGINAL, physical-scale tau_phys
             self.log(f"{stage}_tau_phys_mean_abs", torch.mean(torch.abs(tau_phys_raw_for_logging)), on_epoch=True, on_step=False, sync_dist=True)
 
-        return {"loss": loss, "preds": y_pred_final_denormalized_for_metrics, "targets": y_measured_torque_raw}
+        return {"loss": loss, "preds": y_pred_final_denormalized_for_metrics, "targets": y_measured_torque_raw, "timestamps": timestamps}
 
-    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        # Timestamps are not strictly needed for loss calculation in training_step, but step() expects them
         return self.step(batch, batch_idx, "train")["loss"]
 
-    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+    def validation_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+        # Timestamps might be useful for logging/debugging validation if needed later
         return self.step(batch, batch_idx, "val")
     
-    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+    def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         step_output = self.step(batch, batch_idx, "test")
-        # Store predictions and targets if a callback needs them (e.g., TestPredictionPlotter)
-        self.test_step_outputs.append({'preds': step_output['preds'].detach(), 'targets': step_output['targets'].detach()})
+        # Store predictions, targets, and now timestamps for TestPredictionPlotter
+        self.test_step_outputs.append({
+            'preds': step_output['preds'].detach(), 
+            'targets': step_output['targets'].detach(),
+            'timestamps': step_output['timestamps'].detach() # Timestamps are already 1D
+        })
         return step_output
     
     def on_train_epoch_end(self):
@@ -315,10 +323,12 @@ class ActuatorModel(pl.LightningModule):
             try:
                 self.all_test_preds = torch.cat([out['preds'] for out in self.test_step_outputs])
                 self.all_test_targets = torch.cat([out['targets'] for out in self.test_step_outputs])
+                self.all_test_timestamps = torch.cat([out.get('timestamps') for out in self.test_step_outputs if out.get('timestamps') is not None])
             except RuntimeError as e:
                 print(f"Warning: Could not concatenate test outputs (possibly empty): {e}")
                 self.all_test_preds = torch.empty(0) # Ensure attributes exist even if empty
                 self.all_test_targets = torch.empty(0)
+                self.all_test_timestamps = torch.empty(0)
             self.test_step_outputs.clear() # Clear for next test run (if any)
                 
     def _log_epoch_metrics(self, current_metrics_dict: Dict[str, Any], stage: str):
@@ -351,19 +361,27 @@ class ActuatorModel(pl.LightningModule):
                 return 1.0 
                 
             num_warmup_steps = self.hparams.warmup_epochs * self.trainer.num_training_batches
-            if num_warmup_steps == 0: 
-                num_warmup_steps = 1 
+            # Ensure num_warmup_steps is at least 0, and 1 if warmup_epochs > 0 but num_training_batches is 0 (e.g. during sanity check)
+            if self.hparams.warmup_epochs > 0 and num_warmup_steps == 0:
+                num_warmup_steps = 1 # Avoid division by zero if warmup_epochs > 0
             
             num_training_steps = self.trainer.max_epochs * self.trainer.num_training_batches
+            if num_training_steps == 0: # If total steps are somehow zero, avoid further errors
+                 print(f"Warning: Total training steps calculated as zero. LR will be constant at 1.0.")
+                 return 1.0
+
+            # Adjusted warning condition and logic
             if num_training_steps <= num_warmup_steps:
-                print(f"Warning: Total training steps ({num_training_steps}) <= warmup steps ({num_warmup_steps}). Cosine decay might not behave as expected. Effective LR may be constant or only warmup.")
-                # In this case, just maintain the warmup phase or a constant factor if no warmup
-                return float(current_step) / float(num_warmup_steps) if current_step < num_warmup_steps else 1.0
+                print(f"Info: Total training steps ({num_training_steps}) <= warmup steps ({num_warmup_steps}). Effective LR behavior will be linear warmup to peak, then constant at peak LR.")
+                # Linear warmup, then constant
+                return float(current_step) / float(max(1, num_warmup_steps)) if current_step < num_warmup_steps else 1.0
 
             if current_step < num_warmup_steps:
-                return float(current_step) / float(num_warmup_steps)
+                return float(current_step) / float(max(1, num_warmup_steps)) # max(1,..) to avoid division by zero
             
-            progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+            # Ensure denominator for progress is at least 1
+            num_decay_steps = num_training_steps - num_warmup_steps
+            progress = float(current_step - num_warmup_steps) / float(max(1, num_decay_steps))
             return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi))))
 
         scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda_fn)

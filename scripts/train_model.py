@@ -12,7 +12,7 @@ import json # For saving config summary
 
 from src.data.datamodule import ActuatorDataModule
 from src.models.model import ActuatorModel
-from src.utils.callbacks import TestPredictionPlotter, EarlySummary # Assuming these exist and are compatible
+from src.utils.callbacks import TestPredictionPlotter, EarlySummary, DatasetVisualizationCallback, DebugTestTimeSeriesPlotter # Assuming these exist and are compatible
 # from src.data.datasets import ActuatorDataset # No longer needed for SEQUENCE_LENGTH
 
 from typing import Tuple, Optional # For CustomEarlyStopping type hints
@@ -20,14 +20,14 @@ from typing import Tuple, Optional # For CustomEarlyStopping type hints
 # Helper function for JIT export
 def _export_model_to_jit(
     checkpoint_path: str,
-    model_class: type, # Should be ActuatorModel
+    model_class: type,  # Should be ActuatorModel
     jit_filename: str,
     output_dir: str,
-    # Add model_example_inputs for tracing if method=\"trace\" might be used
-    # For method=\"script\", it's not strictly necessary but good for consistency.
+    # Example inputs for scripting/tracing
     model_example_input: Optional[Tuple[torch.Tensor, Optional[torch.Tensor]]] = None,
     wandb_logger: Optional[WandbLogger] = None,
-    run_name_for_artifact: Optional[str] = None
+    run_name_for_artifact: Optional[str] = None,
+    trainer: Optional[pl.Trainer] = None  # Trainer to attach for to_torchscript
 ):
     """Loads a model from a checkpoint, converts to TorchScript, saves, and logs to WandB."""
     if not os.path.exists(checkpoint_path):
@@ -36,7 +36,6 @@ def _export_model_to_jit(
 
     print(f"\nExporting model from {checkpoint_path} to TorchScript (JIT)...")
     try:
-        # model_to_jit = model_class.load_from_checkpoint(checkpoint_path) #This might not pass hparams correctly after pl update
         # Prefer instantiating model then loading state_dict for robustness
         # First, load the hparams from the checkpoint to instantiate the model correctly.
         ckpt = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
@@ -47,22 +46,32 @@ def _export_model_to_jit(
         # Instantiate model with hparams from checkpoint
         model_to_jit = model_class(**hparams)
         model_to_jit.load_state_dict(ckpt['state_dict'])
-        model_to_jit.eval() # Ensure model is in eval mode
+        model_to_jit.eval()  # Ensure model is in eval mode
+        # Flatten RNN weights to avoid fragmentation warnings
+        if hasattr(model_to_jit, 'model') and hasattr(model_to_jit.model, 'gru'):
+            print("Flattening GRUModel parameters in JIT export...")
+            model_to_jit.model.gru.flatten_parameters()
+        elif hasattr(model_to_jit, 'flatten_parameters'):
+            print("Flattening parameters on top-level JIT model...")
+            model_to_jit.flatten_parameters()
+        # Attach provided Trainer (or a temporary one) so LightningModule.to_torchscript won't error
+        if trainer:
+            model_to_jit.trainer = trainer
+        else:
+            print("Warning: No Trainer provided for JIT export; attaching a temporary Trainer.")
+            model_to_jit.trainer = pl.Trainer()
 
         jit_model_path = os.path.join(output_dir, jit_filename)
         os.makedirs(os.path.dirname(jit_model_path), exist_ok=True) # Ensure dir exists
 
-        # For script=True, example_inputs are not strictly needed for the .to_torchscript() call itself,
-        # but if you were to use method='trace', they would be essential.
-        # Providing them for script mode doesn't hurt and makes the export function more general.
+        # Use Lightning's to_torchscript API
         if model_example_input:
-            scripted_model = torch.jit.script(model_to_jit, example_inputs=[model_example_input])
+            scripted_model = model_to_jit.to_torchscript(
+                method='script', example_inputs=[model_example_input]
+            )
         else:
-            # If no example input, assume the model's forward can be scripted without one
-            # This relies on the model's forward signature being clear to the scripter.
-            # For models with Optional inputs or complex Tuple outputs, providing example_inputs is safer.
             print("Warning: No example_input provided for JIT scripting. Proceeding without it.")
-            scripted_model = torch.jit.script(model_to_jit)
+            scripted_model = model_to_jit.to_torchscript(method='script')
             
         torch.jit.save(scripted_model, jit_model_path)
         print(f"Model successfully exported to TorchScript: {jit_model_path}")
@@ -122,6 +131,7 @@ def train_actuator_model(cfg: DictConfig) -> None:
     # print(OmegaConf.to_yaml(cfg)) # Already logged by WandB if active
 
     pl.seed_everything(cfg.seed, workers=True)
+    torch.set_float32_matmul_precision('high') # Utilize Tensor Cores
 
     datamodule: ActuatorDataModule = hydra.utils.instantiate(cfg.data)
     datamodule.prepare_data() # Ensures all raw datasets are loaded.
@@ -159,6 +169,9 @@ def train_actuator_model(cfg: DictConfig) -> None:
         common_callbacks_types.append(EarlySummary)
     if cfg.train.callbacks.get('test_prediction_plotter', False):
         common_callbacks_types.append(TestPredictionPlotter)
+        common_callbacks_types.append(DebugTestTimeSeriesPlotter)
+    if cfg.train.callbacks.get('dataset_visualization', True): # Default to True
+        common_callbacks_types.append(DatasetVisualizationCallback)
 
     # --- Training Execution --- 
     if evaluation_mode == "global":
@@ -186,24 +199,6 @@ def train_actuator_model(cfg: DictConfig) -> None:
         with open(norm_stats_file_path_global, 'w') as f:
             json.dump(norm_stats_global_dict, f, indent=4)
         print(f"Saved global normalization statistics to {norm_stats_file_path_global}")
-
-        # Save training config summary for global run
-        training_summary_global = {
-            "use_residual": model_cfg_dict.get("use_residual", False),
-            "k_spring": model_cfg_dict.get("k_spring", 0.0),
-            "theta0": model_cfg_dict.get("theta0", 0.0),
-            "kp_phys": model_cfg_dict.get("kp_phys", 0.0),
-            "kd_phys": model_cfg_dict.get("kd_phys", 0.0),
-            "pd_stall_torque_phys_training": model_cfg_dict.get("pd_stall_torque_phys_training", None),
-            "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
-            "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
-            "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
-            "gru_sequence_length_timesteps": datamodule.get_sequence_length_timesteps(), # Updated
-            "input_dim": datamodule.get_input_dim()
-        }
-        with open(os.path.join(output_dir_global, "training_config_summary.json"), 'w') as f:
-            json.dump(training_summary_global, f, indent=4)
-        print(f"Saved global training config summary to {output_dir_global}")
 
         model_cfg_dict_global = model_cfg_dict.copy() # Use a copy for global model
         model_cfg_dict_global['input_mean'], model_cfg_dict_global['input_std'] = input_stats_global
@@ -303,10 +298,11 @@ def train_actuator_model(cfg: DictConfig) -> None:
                     checkpoint_path=checkpoint_callback_global.best_model_path,
                     model_class=ActuatorModel,
                     jit_filename=f"{run_name_global}_best_jit.pt",
-                    output_dir=cfg.outputs_dir, # Save in the root of the run's output dir
-                    model_example_input=example_model_input_for_jit, # Pass example for scripting
+                    output_dir=cfg.outputs_dir,  # Save in the run's output dir
+                    model_example_input=example_model_input_for_jit,
                     wandb_logger=wandb_logger_global,
-                    run_name_for_artifact=run_name_global
+                    run_name_for_artifact=run_name_global,
+                    trainer=trainer_global
                 )
             else:
                 print("No best model checkpoint path available from callback for global run. Skipping JIT export.")
@@ -348,24 +344,6 @@ def train_actuator_model(cfg: DictConfig) -> None:
             with open(norm_stats_file_path_fold, 'w') as f:
                 json.dump(norm_stats_fold_dict, f, indent=4)
             print(f"Saved fold {fold_idx + 1} normalization statistics to {norm_stats_file_path_fold}")
-
-            # Save training config summary for this LOMO fold
-            training_summary_fold = {
-                "use_residual": model_cfg_dict.get("use_residual", False),
-                "k_spring": model_cfg_dict.get("k_spring", 0.0),
-                "theta0": model_cfg_dict.get("theta0", 0.0),
-                "kp_phys": model_cfg_dict.get("kp_phys", 0.0),
-                "kd_phys": model_cfg_dict.get("kd_phys", 0.0),
-                "pd_stall_torque_phys_training": model_cfg_dict.get("pd_stall_torque_phys_training", None),
-                "pd_no_load_speed_phys_training": model_cfg_dict.get("pd_no_load_speed_phys_training", None),
-                "gru_num_layers": model_cfg_dict.get("gru_num_layers"),
-                "gru_hidden_dim": model_cfg_dict.get("gru_hidden_dim"),
-                "gru_sequence_length_timesteps": datamodule.get_sequence_length_timesteps(), # Updated
-                "input_dim": datamodule.get_input_dim()
-            }
-            with open(os.path.join(output_dir_fold_stats, "training_config_summary.json"), 'w') as f:
-                json.dump(training_summary_fold, f, indent=4)
-            print(f"Saved fold {fold_idx + 1} training config summary to {output_dir_fold_stats}")
 
             model_cfg_dict_fold = model_cfg_dict.copy()
             model_cfg_dict_fold['input_mean'], model_cfg_dict_fold['input_std'] = input_stats_fold
@@ -458,9 +436,10 @@ def train_actuator_model(cfg: DictConfig) -> None:
                         model_class=ActuatorModel,
                         jit_filename=f"{run_name_fold}_best_jit.pt",
                         output_dir=fold_jit_output_dir,
-                        model_example_input=example_model_input_for_jit_fold, # Pass example for scripting
+                        model_example_input=example_model_input_for_jit_fold,
                         wandb_logger=wandb_logger_fold,
-                        run_name_for_artifact=run_name_fold
+                        run_name_for_artifact=run_name_fold,
+                        trainer=trainer_fold
                     )
                 else:
                     print(f"No best model checkpoint path available from callback for fold {fold_idx + 1}. Skipping JIT export.")

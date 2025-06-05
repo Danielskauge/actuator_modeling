@@ -4,18 +4,15 @@
 _target_: src.data.datamodule.ActuatorDataModule
 
 # Base directory containing subfolders for each inertia group
-data_base_dir: "data/synthetic_raw"
+data_base_dir: "data/real"
 
 # List of inertia groups. Each group has an id, a subfolder name relative to data_base_dir,
 # and the inertia value (kg*m^2) for all CSVs in that subfolder.
 # The ActuatorDataModule will automatically discover all *.csv files in each 'folder'.
 inertia_groups:
-  - {id: "inertia_0_010", folder: "0.010kgm2", inertia: 0.0100}
-  - {id: "inertia_0_015", folder: "0.015kgm2", inertia: 0.0150}
-  - {id: "inertia_0_020", folder: "0.020kgm2", inertia: 0.0200}
-  # Add more groups as needed:
-  # - {id: "mass_0_025", folder: "0.025kgm2", inertia: 0.0250}
-  # - {id: "mass_0_03", folder: "0.03kgm2", inertia: 0.0300}
+  - {id: "set_1", folder: "pos_A_300g", inertia: 0.004532}
+    {id: "mass_0_025", folder: "0.025kgm2", inertia: 0.0250}
+    {id: "mass_0_03", folder: "0.03kgm2", inertia: 0.0300}
 
 # Directory structure should be:
 # data/real/
@@ -34,15 +31,6 @@ inertia_groups:
 # `features_to_use` is no longer needed here as ActuatorDataset defines its input features internally.
 # The input_dim for the model is dynamically determined by ActuatorDataset.get_input_dim()
 
-target_name: 'tau_measured'
-gyro_axis_for_ang_vel: 'Gyro_Z' # Gyroscope axis for signed angular velocity
-accel_axis_for_torque: 'Acc_Y'   # Accelerometer axis for tangential acceleration to calculate torque
-
-# Sequence length for ActuatorDataset
-# The model input will be (sequence_length, num_features)
-# num_features is fixed at 3 by ActuatorDataset
-sequence_length: 2 # Default sequence length from ActuatorDataset
-
 # Parameters for data splitting in 'global' evaluation mode
 # These are used when all data is aggregated before splitting.
 global_train_ratio: 0.7
@@ -53,12 +41,15 @@ global_val_ratio: 0.15
 batch_size: 256          # Batch size for training and evaluation
 num_workers: 4          # Number of worker processes for data loading
 
-# Fallback sampling frequency if it cannot be determined from the data's timestamps
-# ActuatorDataset attempts to calculate this, but uses this as a fallback.
-# Note: ActuatorModel itself no longer directly uses a sampling_frequency parameter.
-fallback_sampling_frequency: 100.0 # Hz, matches dt=0.01s from synthetic data
-
 # --- System Geometry (passed to ActuatorDataset) ---
 radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.
-radius_load: 0.3  # meters. Approx. radius of variable mass load (for record-keeping/future use).
-                  # This is an example, update if needed, or remove if not used by ActuatorDataset directly. 
+
+# --- Filter Parameters (passed to ActuatorDataset) ---
+filter_cutoff_freq_hz: 40.0 # Cutoff frequency in Hz for low-pass Butterworth filter
+filter_order: 4             # Order of the Butterworth filter
+
+# Sequence duration (seconds) for ActuatorDataset
+# sequence_length will be computed as round(sequence_duration_s * sampling_frequency)
+sequence_duration_s: 1.0 # Duration in seconds for each sequence; must be set in confi
+
+resampling_frequency_hz: 100.0 # Hz

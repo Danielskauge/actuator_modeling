@@ -25,6 +25,7 @@ This project focuses on developing and evaluating models to predict joint torque
     *   [Hydra for Configuration](#hydra-for-configuration)
     *   [Stateful GRU for Time-Series Modeling](#stateful-gru-for-time-series-modeling)
     *   [Two-Stage Evaluation Strategy](#two-stage-evaluation-strategy)
+    *   [Data Resampling Strategy](#data-resampling-strategy)
     *   [Feature Engineering in `ActuatorDataset`](#feature-engineering-in-actuatordataset)
     *   [Residual Modeling in `ActuatorModel`](#residual-modeling-in-actuatormodel)
     *   [Normalization Strategy](#normalization-strategy)
@@ -48,17 +49,19 @@ The project aims to predict the torque applied by an actuator based on its state
     *   Loads raw data from individual CSV files.
     *   Performs crucial preprocessing and feature engineering:
         *   Calculates sampling frequency, converts units.
+        *   **Resampling**: Resamples the time-series data to a `target_sampling_frequency_hz` (configured in the `ActuatorDataModule`) using **linear interpolation**. This ensures uniform sequence lengths across all datasets.
         *   Calculates `tau_measured` (target torque).
         *   Optionally applies a Butterworth filter to the acceleration signal used for `tau_measured`.
         *   Extracts **3 input features**: `current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`.
-    *   Shapes data into sequences. The length of these sequences (`sequence_length_timesteps`) is now configurable via `sequence_duration_s` (e.g., 1.0 seconds) and the dataset's calculated `sampling_frequency`.
+    *   Shapes data into sequences. The length of these sequences (`sequence_length_timesteps`) is now determined by `sequence_duration_s` (e.g., 1.0 seconds) and the **enforced `target_sampling_frequency_hz`**.
     *   Returns raw, unnormalized feature sequences and target torques.
     *   Provides `get_input_dim()` (static) and `get_sequence_length_timesteps()` (instance method).
 
 *   **`src/data/datamodule.py:ActuatorDataModule`**:
     *   Orchestrates `ActuatorDataset` instances.
+    *   Requires `target_sampling_frequency_hz` to be set in its configuration (e.g., `configs/data/default.yaml`). This frequency is passed to all `ActuatorDataset` instances to enforce resampling.
     *   Configurable via `sequence_duration_s` in `configs/data/default.yaml`, which is passed to `ActuatorDataset`.
-    *   Determines and stores `sequence_length_timesteps` and `sampling_frequency` from the first loaded dataset instance.
+    *   Determines and stores `sequence_length_timesteps` and `sampling_frequency` based on the configured `target_sampling_frequency_hz` and `sequence_duration_s`.
     *   Computes and provides normalization statistics (mean, std) for inputs and targets, crucial for the `ActuatorModel`. These are saved to `normalization_stats.json`.
 
 ### Model Architectures
@@ -89,7 +92,7 @@ The project aims to predict the torque applied by an actuator based on its state
 ### Configuration Management
 
 *   **Hydra (`configs/`)**:
-    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`, including the new `sequence_duration_s` parameter.
+    *   `configs/data/default.yaml`: Configures `ActuatorDataModule`, including the new `sequence_duration_s` and `target_sampling_frequency_hz` parameters.
     *   `configs/model/default.yaml`: Configures `ActuatorModel`.
     *   The `training_config_summary.json` output now includes `gru_sequence_length_timesteps`.
 
@@ -161,7 +164,7 @@ actuator_modeling/
 
 2.  **CSV File Format**: Each CSV file should represent data from a specific experimental run. All files within the same subfolder should correspond to the same inertia value.
     *   **Required columns for `ActuatorDataset`**:
-        *   `Time_ms`: Timestamp in milliseconds.
+        *   `Time_ms`: Timestamp in milliseconds; processed as relative differences within each file.
         *   `Encoder_Angle`: Current angle of the actuator (degrees).
         *   `Commanded_Angle`: Desired/target angle of the actuator (degrees).
         *   `Acc_X`, `Acc_Y`, `Acc_Z`: Accelerometer readings (m/s²). The specific axis used for torque calculation (`accel_axis_for_torque`) is configured.
@@ -181,8 +184,8 @@ actuator_modeling/
         *   `filter_cutoff_freq_hz`: (float, optional, default: `null`) Cutoff frequency in Hz for the Butterworth filter applied to the acceleration signal for `tau_measured`. Set to `null` or omit to disable filtering.
         *   `filter_order`: (int, default: 4) Order of the Butterworth filter if `filter_cutoff_freq_hz` is active.
     *   For "Global Evaluation Mode", configure `global_train_ratio` and `global_val_ratio`.
-    *   Ensure `fallback_sampling_frequency` is set if needed (though `ActuatorModel` does not use it directly, `ActuatorDataset` does for its internal calculations).
-    *   **New/Updated**: Configure `sequence_duration_s` (e.g., `1.0` for 1-second sequences). The actual number of timesteps per sequence will be `sequence_duration_s * sampling_frequency`.
+    *   **New/Updated**: Configure `sequence_duration_s` (e.g., `1.0` for 1-second sequences).
+    *   **New**: Configure `target_sampling_frequency_hz` (e.g., `100.0` for 100Hz). All loaded data will be resampled to this frequency.
 
 ### Training Modes
 
@@ -268,6 +271,11 @@ After training, the best model checkpoint can be automatically exported to a Tor
     *   **Training**: For training, sequences of `sequence_length_timesteps` (e.g., 1 second of data) are fed to the model. The `nn.GRU` layer internally propagates the hidden state across the timesteps *within* that sequence. The explicit `h_prev` argument to `ActuatorModel.forward` is typically `None` at the start of processing a batch/sequence during training steps, relying on the `nn.GRU`'s internal handling or default zero initialization.
     *   **Inference**: The JIT-exported model retains this stateful signature. This allows external components, like the `CombinedGRUAndPDActuator` in Isaac Lab, to manage the hidden state explicitly from one inference call (e.g., one simulation step) to the next, enabling continuous memory.
 *   **Two-Stage Evaluation Strategy**: `global` mode for overall learning, `lomo_cv` for generalization to unseen inertias with fold-specific normalization.
+*   **Data Resampling Strategy**:
+    *   To ensure consistent sequence lengths for batching and model input, all raw time-series data loaded from CSVs is resampled.
+    *   The `ActuatorDataModule` requires a `target_sampling_frequency_hz` parameter in its configuration (e.g., `data.target_sampling_frequency_hz=100.0`).
+    *   Each `ActuatorDataset` instance receives this target frequency and resamples its DataFrame using pandas' `resample()` method with **linear interpolation** before any further feature engineering or sequence creation.
+    *   This results in all datasets having the same effective sampling rate, and thus, for a given `sequence_duration_s`, all generated sequences will have the same number of timesteps.
 *   **Feature Engineering in `ActuatorDataset`**: Centralized calculation of 3 core input features (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`) in a **defined order** as specified by `ActuatorDataset.FEATURE_NAMES`. This order is critical as it's implicitly used for calculating and applying normalization statistics and by the input layer of models, including the deployed `CombinedGRUAndPDActuator`. Raw, unnormalized data is passed to `ActuatorDataModule`.
 
 *   **Residual Modeling in `ActuatorModel`**:
@@ -321,6 +329,11 @@ After training, the best model checkpoint can be automatically exported to a Tor
         *   `training_config_summary.json`: Still critical. It provides `gru_num_layers`, `gru_hidden_dim`, parameters for the residual physics model (`kp_phys`, `kd_phys`, etc., if `use_residual=True`), and `gru_sequence_length_timesteps` (which informs about the training context of the hidden state).
         *   `normalization_stats.json`: Essential for normalizing the single time-step inputs at inference time to match the training distribution. The order of features defined in `ActuatorDataset.FEATURE_NAMES` and reflected in this file must be strictly adhered to by the actuator when constructing its input.
     *   The `gru_sequence_length` parameter in `CombinedGRUAndPDActuatorCfg` now serves primarily as a reference to the sequence length the model was trained with, ensuring consistency in understanding the model's architecture, rather than dictating the input shape for per-step inference (which is always 1).
+
+## [2024-05-30] GRU Actuator Config Update
+- The `GruActuator` now reads `gru_num_layers` and `gru_hidden_dim` only from the Hydra config (typically `config.yaml` from training) at runtime.
+- These fields are no longer present in the actuator config class. The runtime values are used for buffer creation and reference.
+- This ensures the runtime matches the trained model architecture, reducing risk of mismatch errors.
 
 ## 7. Future Work and Extensions
 

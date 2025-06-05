@@ -29,7 +29,7 @@ pd_stall_torque_phys_training: null # Stall torque (Nm) for the PD part of tau_p
 pd_no_load_speed_phys_training: null # No-load speed (rad/s) for PD part of tau_phys, if it had a TSC.
 
 # --- Loss Configuration ---
-loss_diff_weight: 0.1 # Weight for the first-difference of torque predictions in the loss
+loss_diff_weight: 0.0 # Weight for the first-difference of torque predictions in the loss
 
 # GRU specific parameters
 gru_hidden_dim: 128

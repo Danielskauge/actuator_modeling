@@ -28,9 +28,9 @@ PLOT_COLUMNS = [col for col in KEY_COLUMNS if col != 'Time_ms']
 ACCEL_COLS = ['Acc_X', 'Acc_Y', 'Acc_Z']
 GYRO_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z']
 # Commanded_Angle is also in PLOT_COLUMNS for individual histogram/timeseries if not handled by PSD explicitly
-PSD_TARGET_COLS = ACCEL_COLS + ['Commanded_Angle'] 
+PSD_TARGET_COLS = ACCEL_COLS + ['Commanded_Angle', 'Gyro_Z', 'Encoder_Angle']
 INDIVIDUAL_TIMESERIES_COLS = ['Encoder_Angle', 'Commanded_Angle']
-
+    
 
 def explore_data(data_dir: Path, output_dir: Path):
     """
@@ -134,17 +134,31 @@ def explore_data(data_dir: Path, output_dir: Path):
         # --- Plotting ---
         # Histograms
         if actual_plot_cols_for_hist_in_df:
-            print(f"\n    Generating histograms for plottable columns...")
-            for col in actual_plot_cols_for_hist_in_df:
-                plt.figure(figsize=(10, 6))
-                sns.histplot(combined_df[col].dropna(), kde=True) # dropna for robustness
-                plt.title(f'Histogram of {col}\n({group_name})', fontsize=10)
-                plt.xlabel(col)
-                plt.ylabel('Frequency')
-                plot_filename = group_output_dir / f"{col}_hist.png"
-                plt.savefig(plot_filename)
-                plt.close()
-            print(f"      Histograms saved to {group_output_dir}")
+            print(f"\n    Generating combined histograms for plottable columns...")
+            num_cols = len(actual_plot_cols_for_hist_in_df)
+            # Adjust subplot layout dynamically, aim for ~3 columns
+            ncols_subplot = min(3, num_cols)
+            nrows_subplot = (num_cols + ncols_subplot - 1) // ncols_subplot # Ceiling division
+            
+            fig_hist, axes_hist = plt.subplots(nrows_subplot, ncols_subplot, figsize=(5 * ncols_subplot, 4 * nrows_subplot))
+            axes_hist = axes_hist.flatten() # Flatten in case of multi-dim array
+
+            for i, col in enumerate(actual_plot_cols_for_hist_in_df):
+                sns.histplot(combined_df[col].dropna(), kde=True, ax=axes_hist[i])
+                axes_hist[i].set_title(f'Histogram of {col}', fontsize=9)
+                axes_hist[i].set_xlabel(col)
+                axes_hist[i].set_ylabel('Frequency')
+            
+            # Hide any unused subplots
+            for j in range(i + 1, len(axes_hist)):
+                fig_hist.delaxes(axes_hist[j])
+
+            fig_hist.suptitle(f'Histograms of Key Features\n({group_name})', fontsize=12, y=1.0) # Adjust y to prevent overlap
+            plt.tight_layout(rect=[0, 0, 1, 0.98]) # Adjust rect to make space for suptitle
+            plot_filename = group_output_dir / f"ALL_Features_histograms.png"
+            plt.savefig(plot_filename)
+            plt.close(fig_hist)
+            print(f"      Combined histograms saved to {plot_filename}")
 
         # Combined Time Series Plots
         accel_cols_present = [col for col in ACCEL_COLS if col in combined_df.columns]
@@ -179,50 +193,68 @@ def explore_data(data_dir: Path, output_dir: Path):
                 plt.close()
                 print(f"      Gyroscope combined time series plot saved to {plot_filename}")
         
-        # Individual Time Series Plots (for columns not covered by combined plots)
-        individual_ts_cols_present = [col for col in INDIVIDUAL_TIMESERIES_COLS if col in combined_df.columns]
-        
-        if time_col_for_plot and individual_ts_cols_present:
-            print(f"\n    Generating individual time series plots...")
-            for col in individual_ts_cols_present:
-                plt.figure(figsize=(12, 6))
-                sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df[col])
-                plt.title(f'{col} vs. Time\n({group_name})', fontsize=10)
-                plt.xlabel('Time (s)')
-                plt.ylabel(col)
-                plot_filename = group_output_dir / f"{col}_timeseries.png"
-                plt.savefig(plot_filename)
-                plt.close()
-            print(f"      Individual time series plots saved to {group_output_dir}")
+        # Combined Time Series Plot for Commanded and Encoder Angle
+        if time_col_for_plot and 'Commanded_Angle' in combined_df.columns and 'Encoder_Angle' in combined_df.columns:
+            print(f"\n    Generating combined time series plot for Commanded and Encoder Angle...")
+            plt.figure(figsize=(12, 6))
+            sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df['Commanded_Angle'], label='Commanded_Angle')
+            sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df['Encoder_Angle'], label='Encoder_Angle')
+            plt.title(f'Commanded and Encoder Angle vs. Time\n({group_name})', fontsize=10)
+            plt.xlabel('Time (s)')
+            plt.ylabel('Angle')
+            plt.legend()
+            plot_filename = group_output_dir / f"Commanded_Encoder_Angle_timeseries.png"
+            plt.savefig(plot_filename)
+            plt.close()
+            print(f"      Combined time series plot for Commanded and Encoder Angle saved to {plot_filename}")
         
         # PSD Plots
         psd_cols_to_plot = [col for col in PSD_TARGET_COLS if col in combined_df.columns]
 
         if fs and psd_cols_to_plot:
-            print(f"\n    Generating PSD plots (Fs={fs:.2f} Hz)...")
+            print(f"\n    Generating combined PSD plots (Fs={fs:.2f} Hz)...")
+            # Only keep columns that will actually be plotted
+            valid_psd_cols = []
             for col in psd_cols_to_plot:
                 if combined_df[col].isnull().all():
                     print(f"      Skipping PSD for {col} as it contains all NaN values.")
                     continue
-                if combined_df[col].nunique() < 2: 
+                if combined_df[col].nunique() < 2:
                     print(f"      Skipping PSD for {col} as it has less than 2 unique values or is constant.")
                     continue
-                
-                plt.figure(figsize=(10, 6))
-                try:
-                    # Using NFFT=256 as a common default, can be adjusted.
-                    # dropna() handles any NaNs that might remain in the column.
-                    plt.psd(combined_df[col].dropna(), NFFT=min(256, len(combined_df[col].dropna())-1 if len(combined_df[col].dropna()) > 1 else 1), Fs=fs) 
-                    plt.title(f'PSD of {col}\n({group_name})', fontsize=10)
-                    plot_filename = group_output_dir / f"{col}_psd.png"
-                    plt.savefig(plot_filename)
-                except ValueError as ve: # Catch specific error if signal is too short for NFFT
-                    print(f"      Could not generate PSD for {col} (possibly too short or constant after dropna): {ve}")
-                except Exception as e_psd:
-                    print(f"      Error generating PSD for {col}: {e_psd}")
-                finally:
-                    plt.close() # Ensure plot is closed even if error occurs
-            print(f"      PSD plots saved to {group_output_dir}")
+                nfft_val = min(256, len(combined_df[col].dropna()) - 1 if len(combined_df[col].dropna()) > 1 else 1)
+                if nfft_val <= 0:
+                    print(f"      Skipping PSD for {col} due to insufficient data points after dropna for NFFT.")
+                    continue
+                valid_psd_cols.append((col, nfft_val))
+
+            num_psd_plots = len(valid_psd_cols)
+            if num_psd_plots == 0:
+                print(f"      No PSD plots were generated for group {group_name}.")
+            else:
+                ncols_psd_subplot = min(3, num_psd_plots)
+                nrows_psd_subplot = (num_psd_plots + ncols_psd_subplot - 1) // ncols_psd_subplot
+                fig_psd, axes_psd = plt.subplots(nrows_psd_subplot, ncols_psd_subplot, figsize=(6 * ncols_psd_subplot, 4 * nrows_psd_subplot))
+                if num_psd_plots == 1:
+                    axes_psd = [axes_psd]
+                else:
+                    axes_psd = axes_psd.flatten()
+                for i, (col, nfft_val) in enumerate(valid_psd_cols):
+                    try:
+                        axes_psd[i].psd(combined_df[col].dropna(), NFFT=nfft_val, Fs=fs)
+                        axes_psd[i].set_title(f'PSD of {col}', fontsize=9)
+                    except Exception as e_psd:
+                        print(f"      Error generating PSD for {col}: {e_psd}")
+                # Hide any unused subplots
+                for j in range(i + 1, len(axes_psd)):
+                    fig_psd.delaxes(axes_psd[j])
+                fig_psd.suptitle(f'Power Spectral Density (PSD) Plots\n({group_name}, Fs={fs:.2f} Hz)', fontsize=12, y=1.0)
+                plt.tight_layout(rect=[0, 0, 1, 0.98])
+                plot_filename = group_output_dir / f"ALL_Features_PSD.png"
+                plt.savefig(plot_filename)
+                print(f"      Combined PSD plots saved to {plot_filename}")
+                plt.close(fig_psd)
+            
         elif not fs and psd_cols_to_plot : # if there are cols to plot but fs is None
              print(f"\n    Skipping PSD plots because sampling frequency (Fs) could not be determined or is invalid.")
         
@@ -258,18 +290,29 @@ def main():
         description="Explore actuator data CSV files, print summaries, and generate plots."
     )
     parser.add_argument(
-        "--data_dir",
-        type=Path,
-        default=Path(__file__).resolve().parent.parent / "data" / "real",
-        help="Directory containing inertia group subfolders with CSV files. Default: ../data/real",
+        "--data_type",
+        type=str,
+        choices=["real", "synthetic"],
+        default="real",
+        help="Type of data to explore: 'real' or 'synthetic'. Default: real",
     )
     parser.add_argument(
+        "--data_dir",
+        type=Path,
+        default=None,
+        help="Directory containing inertia group subfolders with CSV files. If not provided, defaults to ../data/<data_type>.",
+    )
+    parser.add_argument(
+        
         "--output_dir",
         type=Path,
         default=Path(__file__).resolve().parent.parent / "exploration_plots",
         help="Directory to save plots and summaries. Default: ../exploration_plots",
     )
     args = parser.parse_args()
+
+    if args.data_dir is None:
+        args.data_dir = Path(__file__).resolve().parent.parent / "data" / args.data_type
 
     explore_data(args.data_dir, args.output_dir)
 

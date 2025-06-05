@@ -4,11 +4,11 @@ import pandas as pd
 from torch.utils.data import Dataset
 from typing import Tuple, List, Dict, Any, Optional
 from scipy.signal import butter, filtfilt
+from scipy import interpolate
 import os
 
 # Constants
 RAD_PER_DEG = np.pi / 180.0
-G_ACCEL = 9.81  # m/s^2
 
 class ActuatorDataset(Dataset):
     """
@@ -19,59 +19,51 @@ class ActuatorDataset(Dataset):
     Input features: current_angle_rad, target_angle_rad, current_ang_vel_rad_s
     """
     
-    FEATURE_NAMES = [
-        'current_angle_rad',
-        'target_angle_rad',
-        'current_ang_vel_rad_s'
-        # 'target_ang_vel_rad_s' # Removed as per user request
-    ]
-    INPUT_DIM = len(FEATURE_NAMES) # Should be 3 now
+  
 
     def __init__(
         self,
         csv_file_path: str,
         inertia: float,
         radius_accel: float,
-        sequence_duration_s: float, # Added: desired sequence duration in seconds
-        gyro_axis_for_ang_vel: str = 'Gyro_Z',
-        accel_axis_for_torque: str = 'Acc_Y',
-        target_name: str = 'tau_measured',
+        sequence_length_timesteps: int, # Number of timesteps per sequence
+        resampling_frequency_hz: float, # Mandatory target sampling frequency
+        main_gyro_axis: str = 'Gyro_Z',
+        main_accel_axis: str = 'Acc_Y',
         filter_cutoff_freq_hz: Optional[float] = None,
-        filter_order: int = 4
+        filter_order: int = 4,
+        is_synthetic_data: bool = False, # Flag to indicate synthetic vs real data
     ):
         """
         Args:
             csv_file_path: Path to the CSV data file.
             inertia: Inertia of the system (kg*m^2).
             radius_accel: Radius to the point where tangential acceleration is measured by accel_axis_for_torque (meters).
-            sequence_duration_s: Desired sequence duration in seconds.
-            gyro_axis_for_ang_vel: Gyroscope axis ('Gyro_X', 'Gyro_Y', 'Gyro_Z') for signed angular velocity.
-            accel_axis_for_torque: Accelerometer axis ('Acc_X', 'Acc_Y', 'Acc_Z') for tangential acceleration.
-            target_name: Name of the target column to predict.
+            sequence_length_timesteps: Number of timesteps per sequence (calculated by DataModule).
+            resampling_frequency_hz: Data will be resampled to this frequency if not synthetic.
+            main_gyro_axis: Gyroscope axis ('Gyro_X', 'Gyro_Y', 'Gyro_Z') for signed angular velocity.
+            main_accel_axis: Accelerometer axis ('Acc_X', 'Acc_Y', 'Acc_Z') for tangential acceleration.
             filter_cutoff_freq_hz: Optional cutoff frequency in Hz for a low-pass Butterworth filter applied to the tangential acceleration signal used for deriving tau_measured. If None, no filter is applied.
             filter_order: Order of the Butterworth filter if used.
+            is_synthetic_data: Flag to indicate whether data is synthetic (True) or real (False). For real data, a 10.8° offset is subtracted from the commanded angle.
         """
         self.csv_file_path = csv_file_path
         self.inertia = inertia
         self.radius_accel = radius_accel
-        self.gyro_axis_for_ang_vel = gyro_axis_for_ang_vel
-        self.accel_axis_for_torque = accel_axis_for_torque
-        self.target_name = target_name
+        self.main_gyro_axis = main_gyro_axis
+        self.main_accel_axis = main_accel_axis
         self.filter_cutoff_freq_hz = filter_cutoff_freq_hz
         self.filter_order = filter_order
-
+        self.resampling_frequency_hz = resampling_frequency_hz # Store for internal use (esp. non-synthetic)
+        self.sequence_length_timesteps = sequence_length_timesteps # Set directly from DataModule
+        self.is_synthetic_data = is_synthetic_data # Store synthetic flag
+        self.sampling_frequency: Optional[float] = None # Will be set during preprocessing
         self.data_df = self._load_and_preprocess_data()
         
-        # Calculate sequence length in timesteps
-        if self.sampling_frequency is None or self.sampling_frequency <= 0:
-            raise ValueError("Sampling frequency not determined or invalid, cannot calculate sequence length.")
-        self.sequence_length_timesteps = int(round(sequence_duration_s * self.sampling_frequency))
-        if self.sequence_length_timesteps < 1:
-            raise ValueError(f"Calculated sequence_length_timesteps ({self.sequence_length_timesteps}) is less than 1. "
-                             f"Duration: {sequence_duration_s}s, Fs: {self.sampling_frequency}Hz. Increase duration or check data.")
-        print(f"  Dataset {os.path.basename(csv_file_path)}: sequence_duration_s={sequence_duration_s}s, sampling_frequency={self.sampling_frequency:.2f}Hz -> sequence_length_timesteps={self.sequence_length_timesteps}")
+        if self.sampling_frequency is None:
+            raise ValueError(f"Sampling frequency is None for {os.path.basename(csv_file_path)}. This should not happen.")
 
-        self.X_sequences, self.y_sequences = self._create_sequences()
+        self.X_sequences, self.y_sequences, self.timestamps_sequences = self._create_sequences()
 
     def _load_and_preprocess_data(self) -> pd.DataFrame:
         """Loads data from CSV and performs all preprocessing and feature engineering."""
@@ -79,109 +71,83 @@ class ActuatorDataset(Dataset):
             df = pd.read_csv(self.csv_file_path)
         except FileNotFoundError:
             raise FileNotFoundError(f"CSV file not found: {self.csv_file_path}")
-
-        # 1. Time handling: Convert Time_ms to seconds and set as index
+        
+        # Time handling - normalize to start from 0
         df['time_s'] = df['Time_ms'] / 1000.0
+        df['time_s'] = df['time_s'] - df['time_s'].min()
         df = df.set_index('time_s')
-        df.index = pd.to_datetime(df.index, unit='s') # For proper time-based operations
-        
-        # Calculate dt (sampling period) - important for derivatives
-        # Ensure time is sorted
         df = df.sort_index()
-        dt_series = df.index.to_series().diff().median().total_seconds()
-        if pd.isna(dt_series) or dt_series <= 0:
-            # Fallback if diff().median() fails (e.g. too few data points)
-            if len(df) > 1:
-                dt_series = (df.index[-1] - df.index[0]).total_seconds() / (len(df) - 1)
-                if dt_series <= 0:
-                    raise ValueError(f"Cannot determine valid sampling period for {self.csv_file_path}. "
-                                   f"Calculated dt_series: {dt_series}. Check time data quality.")
-            else:
-                raise ValueError(f"Cannot determine sampling frequency for {self.csv_file_path}. "
-                               f"Only {len(df)} data point(s) available. Need at least 2 points.")
-            print(f"Warning: Could not reliably determine dt from time index for {self.csv_file_path}. "
-                  f"Using average dt = {dt_series:.6f}s. Ensure data is uniformly sampled.")
+        
+        # Remove the first 1 second of data
+        df = df[df.index >= 1.0]
+        print(f"  Removed first 1.0s of data from {os.path.basename(self.csv_file_path)}. Remaining duration: {df.index.max():.2f}s")
 
-        if dt_series <= 0:
-            raise ValueError(f"Invalid sampling period (dt_series = {dt_series}) for {self.csv_file_path}. "
-                           f"Cannot proceed with calculations.")
-        
-        self.sampling_frequency = 1.0 / dt_series
-        
-        # 2. Angle conversions: Degrees to Radians
-        df['current_angle_rad'] = df['Encoder_Angle'] * RAD_PER_DEG
-        df['target_angle_rad'] = df['Commanded_Angle'] * RAD_PER_DEG
-
-        # 3. Angular Velocities
-        # 3a. Current Angular Velocity (theta_dot) from Gyro
-        gyro_cols = ['Gyro_X', 'Gyro_Y', 'Gyro_Z']
-        for col in gyro_cols: # Convert gyro data from deg/s to rad/s
-            df[col + '_rad_s'] = df[col] * RAD_PER_DEG
-        
-        if self.gyro_axis_for_ang_vel and self.gyro_axis_for_ang_vel + '_rad_s' in df.columns:
-            df['current_ang_vel_rad_s'] = df[self.gyro_axis_for_ang_vel + '_rad_s']
-            # print(f"Using '{self.gyro_axis_for_ang_vel}_rad_s' for current_ang_vel_rad_s.") # Less verbose
+        # Resampling using scipy interpolation for better control
+        if self.resampling_frequency_hz is not None:
+            # Create new time grid starting from 0
+            start_time = 0.0  # Now always starts from 0
+            end_time = df.index.max()
+            dt = 1.0 / self.resampling_frequency_hz
+            new_times = np.arange(start_time, end_time + dt, dt)
+            
+            # Interpolate each column
+            resampled_data = {}
+            for col in df.columns:
+                f = interpolate.interp1d(df.index.values, df[col].values, 
+                                       kind='linear', bounds_error=False, fill_value='extrapolate')
+                resampled_data[col] = f(new_times)
+            
+            # Create new dataframe
+            df = pd.DataFrame(resampled_data, index=new_times)
+            df.index.name = 'time_s'
+            self.sampling_frequency = self.resampling_frequency_hz
         else:
-            # Fallback or if explicitly wanting magnitude (though sign is lost)
-            # This is generally not recommended if a primary axis is known.
-            df['current_ang_vel_rad_s_mag'] = np.sqrt(df['Gyro_X_rad_s']**2 + df['Gyro_Y_rad_s']**2 + df['Gyro_Z_rad_s']**2)
-            df['current_ang_vel_rad_s'] = df['current_ang_vel_rad_s_mag'] # Default to magnitude if specific axis fails
-            print(f"Warning: Using magnitude of gyro for current_ang_vel_rad_s. Sign information is lost. Gyro_axis specified: {self.gyro_axis_for_ang_vel}")
+            self.sampling_frequency = 1.0 / (df.index[1] - df.index[0]) if len(df) > 1 else 1.0
 
+        # Feature engineering
+        df['angle_rad'] = df['Encoder_Angle'] * RAD_PER_DEG
+        
+        # Apply commanded angle offset correction only for real data (not synthetic)
+        if self.is_synthetic_data:
+            df['target_angle_rad'] = df['Commanded_Angle'] * RAD_PER_DEG
+        else:
+            # Real data: subtract 10.8 degrees offset from commanded angle
+            df['target_angle_rad'] = (df['Commanded_Angle'] - 10.8) * RAD_PER_DEG
+            print(f"  Applied 10.8° offset correction to commanded angle for {os.path.basename(self.csv_file_path)} (real data).")
+            
+        df['ang_vel_rad'] = df['Gyro_Z'] * RAD_PER_DEG
+        
+        lin_acc = df[self.main_accel_axis]
+        ang_acc = lin_acc / self.radius_accel
+        
+        torque = self.inertia * ang_acc
 
-        # 4. Measured Torque (tau_measured) - Ground Truth
-        # Calculation based on tangential accelerometer: tau = I * (a_tangential / r)
-        if self.accel_axis_for_torque not in df.columns:
-            raise ValueError(f"Specified accel_axis_for_torque '{self.accel_axis_for_torque}' not found. Columns: {df.columns.tolist()}")
-        if self.radius_accel <= 0:
-            raise ValueError("radius_accel must be positive.")
-        
-        # The acceleration used here is the one related to the chosen tangential axis, 
-        # NOT the one derived from gyro (current_ang_accel_rad_s2_for_target)
-        angular_accel_from_tangential_sensor = df[self.accel_axis_for_torque] / self.radius_accel
-        
-        # Apply low-pass filter to the angular acceleration signal if configured
-        if self.filter_cutoff_freq_hz is not None and self.filter_cutoff_freq_hz > 0 and self.sampling_frequency > 0:
+        # Low pass filtering of torque
+        if self.filter_cutoff_freq_hz is not None:
             nyquist_freq = 0.5 * self.sampling_frequency
+            # Ensure filter_cutoff_freq_hz is less than Nyquist frequency
             if self.filter_cutoff_freq_hz < nyquist_freq:
                 Wn = self.filter_cutoff_freq_hz / nyquist_freq
                 b, a = butter(self.filter_order, Wn, btype='low', analog=False)
-                
-                # Ensure there are enough data points to filter
-                if len(angular_accel_from_tangential_sensor) > self.filter_order * 3: # Rule of thumb for filtfilt
-                    angular_accel_from_tangential_sensor_filtered = filtfilt(b, a, angular_accel_from_tangential_sensor)
-                    print(f"  Applied Butterworth low-pass filter (cutoff: {self.filter_cutoff_freq_hz} Hz, order: {self.filter_order}) to tangential acceleration for {self.csv_file_path}.")
-                else:
-                    angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # Not enough data, use unfiltered
-                    print(f"  Warning: Not enough data points ({len(angular_accel_from_tangential_sensor)}) to apply Butterworth filter for {self.csv_file_path}. Using unfiltered tangential acceleration.")
+                torque = filtfilt(b, a, torque)
+                print(f"  Applied Butterworth low-pass filter (cutoff: {self.filter_cutoff_freq_hz} Hz, order: {self.filter_order}) to tangential acceleration for {os.path.basename(self.csv_file_path)}.")
             else:
-                angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # Cutoff is too high, use unfiltered
-                print(f"  Warning: Filter cutoff frequency ({self.filter_cutoff_freq_hz} Hz) is >= Nyquist frequency ({nyquist_freq} Hz) for {self.csv_file_path}. Using unfiltered tangential acceleration.")
-        else:
-            angular_accel_from_tangential_sensor_filtered = angular_accel_from_tangential_sensor # No filter configured or invalid params
+                print(f"  Warning: Filter cutoff frequency ({self.filter_cutoff_freq_hz} Hz) is >= Nyquist frequency ({nyquist_freq} Hz) for {os.path.basename(self.csv_file_path)}. Using unfiltered tangential acceleration for torque calculation.")
+            
+        # Target    
+        df['torque'] = torque
+        
+        # Keep the main acceleration axis for visualization callbacks
+        df = df[['torque', 'angle_rad', 'target_angle_rad', 'ang_vel_rad', self.main_accel_axis]]
+        
+        return df
 
-        df[self.target_name] = self.inertia * angular_accel_from_tangential_sensor_filtered
-
-
-        # 6. Accelerometer Data Processing (Optional features, not part of core input currently)
-        # Remove gravity from Z-axis. Acc_X, Acc_Y are kept as is.
-        # This assumes Acc_Z is primarily aligned with gravity.
-        # df['Acc_Z_corrected'] = df['Acc_Z'] - G_ACCEL 
-        # df['Acc_X_raw'] = df['Acc_X'] 
-        # df['Acc_Y_raw'] = df['Acc_Y']
-
-        # Ensure all requested features are present
-        missing_features = [f for f in self.FEATURE_NAMES if f not in df.columns]
-        if missing_features:
-            raise ValueError(f"Missing required features after processing: {missing_features}. Available: {df.columns.tolist()}")
-
-        # print(f"Successfully processed {self.csv_file_path}. Shape: {df.shape}. Input Dim: {self.INPUT_DIM}") # Less verbose
-        return df[self.FEATURE_NAMES + [self.target_name]] # Select only needed columns
-
-    def _create_sequences(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Creates sequences of features and corresponding targets."""
-        feature_data = self.data_df[self.FEATURE_NAMES].values
-        target_data = self.data_df[self.target_name].values
+    def _create_sequences(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Creates sequences of features, corresponding targets, and timestamps for targets."""
+        feature_data = self.data_df[['angle_rad', 'target_angle_rad', 'ang_vel_rad']].values
+        target_data = self.data_df['torque'].values
+        # Now that time starts from 0, we can use it directly as float seconds
+        timestamps_numeric = self.data_df.index.values
 
         num_samples = len(feature_data) - self.sequence_length_timesteps + 1
         
@@ -191,138 +157,31 @@ class ActuatorDataset(Dataset):
                 f"of length {self.sequence_length_timesteps} for file {self.csv_file_path}."
             )
 
-        X = np.array([feature_data[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
+        X_np = np.array([feature_data[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
         # The target corresponds to the state at the *end* of the sequence
-        y = np.array([target_data[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
+        y_np = np.array([target_data[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
+        # The timestamp corresponds to the time of the target y
+        timestamps_np = np.array([timestamps_numeric[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
         
-        return torch.from_numpy(X).float(), torch.from_numpy(y).float().unsqueeze(1) # Target shape: [num_samples, 1]
+        X_tensor = torch.from_numpy(X_np).float()
+        y_tensor = torch.from_numpy(y_np).float().unsqueeze(1) # Target shape: [num_samples, 1]
+        timestamps_tensor = torch.from_numpy(timestamps_np).float().unsqueeze(1) # Timestamps shape: [num_samples, 1]
+
+        return X_tensor, y_tensor, timestamps_tensor
 
     def __len__(self) -> int:
         return len(self.X_sequences)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self.X_sequences[idx], self.y_sequences[idx]
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.X_sequences[idx], self.y_sequences[idx], self.timestamps_sequences[idx]
 
     def get_sampling_frequency(self) -> float:
         return self.sampling_frequency
 
     @staticmethod
     def get_input_dim() -> int:
-        return ActuatorDataset.INPUT_DIM
+        return 3
 
     def get_sequence_length_timesteps(self) -> int:
         """Returns the actual sequence length in timesteps for this dataset instance."""
         return self.sequence_length_timesteps
-
-if __name__ == '__main__':
-    # --- Example Usage ---
-    # Create a dummy CSV file for testing
-    print("Creating dummy_actuator_data.csv for testing ActuatorDataset...")
-    num_rows = 200
-    fs_test = 100 # 100 Hz
-    dt_test = 1.0 / fs_test
-    time_ms_test = np.arange(0, num_rows * dt_test, dt_test) * 1000
-
-    dummy_data = pd.DataFrame({
-        'Time_ms': time_ms_test,
-        'Encoder_Angle': 90 * np.sin(2 * np.pi * 0.5 * time_ms_test / 1000), # 0.5 Hz sine wave
-        'Commanded_Angle': 90 * np.sin(2 * np.pi * 0.5 * time_ms_test / 1000 + np.pi/4), # Phase shifted
-        'Acc_X': np.random.randn(num_rows) * 0.5,
-        'Acc_Y': np.sin(2 * np.pi * 0.5 * time_ms_test / 1000) * 10, # Tangential accel mimic
-        'Acc_Z': 9.81 + np.random.randn(num_rows) * 0.5, # Gravity + noise
-        'Gyro_X': np.random.randn(num_rows) * 5,
-        'Gyro_Y': np.random.randn(num_rows) * 5,
-        'Gyro_Z': (90 * RAD_PER_DEG * 0.5 * 2 * np.pi) * np.cos(2 * np.pi * 0.5 * time_ms_test / 1000) / RAD_PER_DEG, # Gyro_Z in deg/s
-        'ADC': np.random.randint(500, 600, num_rows)
-    })
-    dummy_csv_path = "dummy_actuator_data.csv"
-    dummy_data.to_csv(dummy_csv_path, index=False)
-    print(f"Dummy data saved to {dummy_csv_path}")
-
-    # Define features required by the model, especially for tau_phys calculation
-    # Order matters if _calculate_tau_phys in the LightningModule uses hardcoded indices.
-    # current_angle_rad, target_angle_rad, current_ang_vel_rad_s, target_ang_vel_rad_s
-    # then Acc_X_raw, Acc_Y_raw, Acc_Z_corrected
-    model_input_features = [
-        'current_angle_rad', 
-        'target_angle_rad', 
-        'current_ang_vel_rad_s', 
-        'target_ang_vel_rad_s',
-        'Acc_X_raw',
-        'Acc_Y_raw',
-        'Acc_Z_corrected'
-    ]
-
-    test_inertia = 0.05 # kg*m^2
-    test_radius_accel = 0.2 # m
-    test_gyro_axis = 'Gyro_Z'
-    test_accel_axis = 'Acc_Y'
-    # test_sequence_length = int(fs_test * 1.0) # 1 second sequences # Old way
-    test_sequence_duration_s = 1.0 # New: 1 second sequence duration
-
-    try:
-        dataset = ActuatorDataset(
-            csv_file_path=dummy_csv_path,
-            inertia=test_inertia,
-            radius_accel=test_radius_accel,
-            sequence_duration_s=test_sequence_duration_s, # New parameter
-            gyro_axis_for_ang_vel=test_gyro_axis,
-            accel_axis_for_torque=test_accel_axis,
-            filter_cutoff_freq_hz=50.0 # Example for testing
-        )
-        print(f"Dataset created. Number of sequences: {len(dataset)}")
-        X_sample, y_sample = dataset[0]
-        print(f"Sample X shape: {X_sample.shape}") # Expected: (sequence_length, num_features)
-        print(f"Sample y shape: {y_sample.shape}")   # Expected: (1,) or (1,1)
-        print(f"Input Dim for model should be: {X_sample.shape[1]}")
-        print(f"Sampling frequency from dataset: {dataset.get_sampling_frequency()} Hz")
-        print(f"Sequence length in timesteps from dataset: {dataset.get_sequence_length_timesteps()}") # Updated call
-
-        # Check feature order for tau_phys (first 4 are critical for indexing in model)
-        print("\nFeature names in order from dataset (X_sample.shape[1]):")
-        for i, name in enumerate(dataset.FEATURE_NAMES):
-            print(f"  Index {i}: {name}")
-        
-        # Verify derived quantities
-        print("\nSample of processed data (first 5 rows of internal df):")
-        print(dataset.data_df.head())
-        
-        print("\nSample of target 'tau_measured':")
-        print(dataset.data_df['tau_measured'].head())
-
-        dataset_no_filter = ActuatorDataset(
-            csv_file_path=dummy_csv_path,
-            inertia=test_inertia,
-            radius_accel=test_radius_accel,
-            sequence_duration_s=test_sequence_duration_s, # New parameter
-            gyro_axis_for_ang_vel=test_gyro_axis,
-            accel_axis_for_torque=test_accel_axis,
-            filter_cutoff_freq_hz=None # Test without filter
-        )
-        print(f"Dataset (no filter) created. Number of sequences: {len(dataset_no_filter)}")
-        print(f"Sample target (no filter): {dataset_no_filter.data_df['tau_measured'].head().values}")
-        print(f"Sample target (with 50Hz filter): {dataset.data_df['tau_measured'].head().values}")
-
-    except Exception as e:
-        print(f"Error during ActuatorDataset test: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up dummy file
-        if os.path.exists(dummy_csv_path):
-            os.remove(dummy_csv_path)
-            print(f"Cleaned up {dummy_csv_path}")
-
-"""
-Features to be used by the model must be specified in `features_to_use`.
-The order of the first four features in this list is critical if `use_residual=True` in `ActuatorModel`,
-as `_calculate_tau_phys` assumes:
-- Index 0: current_angle_rad
-- Index 1: target_angle_rad
-- Index 2: current_ang_vel_rad_s
-- Index 3: target_ang_vel_rad_s
-
-The remaining features can be in any order and will be appended.
-The `input_dim` for the model will be `len(features_to_use)`.
-The target is `tau_measured`.
-"""

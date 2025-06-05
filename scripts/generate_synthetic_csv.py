@@ -10,12 +10,12 @@ G_ACCEL = 9.81  # m/s^2
 # --- Simulation Parameters for Synthetic Data Generation ---
 class SyntheticDataConfig:
     # File output
-    output_dir: str = "data/synthetic_raw" # Subdirectory for generated CSVs
+    output_dir: str = "data/synthetic" # Subdirectory for generated CSVs
     num_different_inertias: int = 1
     base_filename: str = "synthetic_actuator_data_mass"
 
     # System properties (can be varied per file)
-    base_inertia: float = 0.083  # kg*m^2 (will be varied)
+    base_inertia: float = 0.1  # kg*m^2 (will be varied)
     radius_for_acc_y: float = 0.2 # meters (distance from pivot to Acc_Y sensor, for Acc_Y generation)
     
     # PD Controller for generating behavior (these are the *true* underlying parameters)
@@ -29,11 +29,11 @@ class SyntheticDataConfig:
 
     # Simulation settings
     dt: float = 0.01  # Simulation time step [s] (100 Hz)
-    t_sim_per_file: float = 20.0  # Total simulation time per file [s]
-    noise_torque_std: float = 0.05 # Standard deviation of noise added to PD torque command [Nm]
+    t_sim_per_file: float = 50.0  # Total simulation time per file [s]
+    noise_torque_std: float = 0.0 # Standard deviation of noise added to PD torque command [Nm]
     noise_gyro_std_rad_s: float = 0.01 # Noise on GyroZ readings (rad/s)
-    noise_accel_std_m_s2: float = 0.1 # Noise on Acc_Y readings (m/s^2)
-    noise_encoder_std_rad: float = 0.001 # Noise on Encoder_Angle readings (rad)
+    noise_accel_std_m_s2: float = 0.0 # Noise on Acc_Y readings (m/s^2)
+    noise_encoder_std_rad: float = 0.01 # Noise on Encoder_Angle readings (rad)
 
     # Target Trajectory parameters (can be varied per file)
     base_amp_target_rad: float = np.pi / 4  # Amplitude of target angle [rad]

@@ -1,12 +1,12 @@
 _target_: src.data.datamodule.ActuatorDataModule
 
 # Base directory containing subfolders for each inertia group
-data_base_dir: "data/synthetic_raw"
+data_base_dir: "data/synthetic"
 
 # List of inertia groups for synthetic data. Each group contains multiple CSV files.
 # This configuration is useful for testing and development.
 inertia_groups:
-  - {id: "test_inertia", folder: "0.083kgm2", inertia: 0.083}
+  - {id: "test_inertia", folder: "0.100kgm2", inertia: 0.1}
 
 # Example directory structure for synthetic data:
 # data/synthetic_raw/
@@ -22,10 +22,6 @@ inertia_groups:
 #       ├── synthetic_actuator_data_mass_2_run_1.csv
 #       └── ...
 
-target_name: 'tau_measured'
-gyro_axis_for_ang_vel: 'Gyro_Z'
-accel_axis_for_torque: 'Acc_Y'
-
 # --- DataModule Parameters ---
 batch_size: 32
 num_workers: 4
@@ -35,8 +31,14 @@ seed: ${seed}
 global_train_ratio: 0.7
 global_val_ratio: 0.15
 
-# --- Fallback for Data Sampling Frequency ---
-fallback_sampling_frequency: 100.0 # Hz
+synthetic_data_frequency_hz: 100.0
 
 # --- System Geometry ---
 radius_accel: 0.2 # meters
+
+# --- Filtering for tau_measured (applied in ActuatorDataset) ---
+filter_cutoff_freq_hz: null # Hz, set to null or remove to disable. Adjust as needed.
+filter_order: 4 # Order of Butterworth filter, default is 4.
+
+# --- Sequence Duration ---
+sequence_duration_s: 0.5 # Duration in seconds for each sequence; must be set in config

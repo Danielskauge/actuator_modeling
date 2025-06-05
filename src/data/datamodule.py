@@ -5,11 +5,11 @@ import json
 
 import pytorch_lightning as pl
 import torch
-from torch.utils.data import DataLoader, ConcatDataset, Dataset, random_split # Added random_split
-import pandas as pd # Keep for __main__ example
-import numpy as np  # Keep for __main__ example
+from torch.utils.data import DataLoader, ConcatDataset, Dataset, random_split
+import pandas as pd
+import numpy as np
 
-from src.data.datasets import ActuatorDataset # ActuatorDataset now has fixed input_dim and sequence_length
+from src.data.datasets import ActuatorDataset
 
 class ActuatorDataModule(pl.LightningDataModule):
     """
@@ -25,154 +25,127 @@ class ActuatorDataModule(pl.LightningDataModule):
         data_base_dir: str,  # Base directory containing subfolders for each inertia group
         inertia_groups: List[Dict[str, Any]],  # Each dict: {'id': str, 'folder': str, 'inertia': float}
         radius_accel: float, # Radius for tangential acceleration calculation in ActuatorDataset
-        gyro_axis_for_ang_vel: str = 'Gyro_Z',
-        accel_axis_for_torque: str = 'Acc_Y',
-        target_name: str = 'tau_measured',
+        filter_order: int,
+        filter_cutoff_freq_hz: Optional[float],
+        sequence_duration_s: float,
+        global_train_ratio: float,
+        global_val_ratio: float,
+        resampling_frequency_hz: Optional[float] = None,
+        synthetic_data_frequency_hz: Optional[float] = None,
+        main_gyro_axis: str = 'Gyro_Z',
+        main_accel_axis: str = 'Acc_Y',
         # DataLoader params
         batch_size: int = 32,
         num_workers: int = 4,
-        sequence_duration_s: float = 0.02, # Added: default to 0.02s (2 steps if 100Hz)
-        # For Global Split Mode
-        global_train_ratio: float = 0.7,
-        global_val_ratio: float = 0.15,
-        # global_test_ratio is inferred (1 - train_ratio - val_ratio)
-        seed: int = 42, # Seed for reproducible splits (both global and LOMO fold selection if applicable)
-        # Filter parameters for ActuatorDataset
-        filter_cutoff_freq_hz: Optional[float] = None,
-        filter_order: int = 4,
-        **kwargs # Catches any other params from Hydra config (e.g. radius_load)
+        seed: int = 42,
+        **kwargs
     ):
         super().__init__()
-        # Manually save hyperparameters
-        self.save_hyperparameters() # Saves all __init__ args as hparams
+        self.save_hyperparameters()
 
-        self.datasets_by_group: Dict[str, List[ActuatorDataset]] = {}  # group_id -> list of ActuatorDataset instances
-        self.ordered_group_ids: List[str] = []  # Consistent ordering for LOMO CV
+        if synthetic_data_frequency_hz is not None:
+            self.sampling_frequency = synthetic_data_frequency_hz
+        else:
+            self.sampling_frequency = resampling_frequency_hz
+            
+        self._normalization_stats_computed_for_global_train = False
         
-        # For Global Split Mode
+        self.sequence_length_timesteps = int(round(sequence_duration_s * self.sampling_frequency))
+        
+        self.datasets_by_group: Dict[str, List[ActuatorDataset]] = {}
+        self.ordered_group_ids: List[str] = []
+        
+        # Global split datasets
         self.global_train_dataset: Optional[Dataset] = None
         self.global_val_dataset: Optional[Dataset] = None
         self.global_test_dataset: Optional[Dataset] = None
-
-        # For LOMO CV Fold Mode
+        
+        # LOMO fold datasets
         self.current_fold_train_dataset: Optional[Dataset] = None
-        self.current_fold_val_dataset: Optional[Dataset] = None # Unseen data for validation in a fold
-        self.current_fold_test_dataset: Optional[Dataset] = None # Unseen data for testing in a fold
-
-        # Current operation mode (set by setup methods)
-        self._current_mode: Optional[str] = None # "global" or "lomo_fold"
-
-        # These are now fixed by ActuatorDataset class definition
+        self.current_fold_val_dataset: Optional[Dataset] = None
+        self.current_fold_test_dataset: Optional[Dataset] = None
+        
+        self._current_mode: Optional[str] = None
         self.input_dim = ActuatorDataset.get_input_dim()
-        self.sequence_length_timesteps: Optional[int] = None # Will be set from first dataset instance
-        self.sampling_frequency: Optional[float] = None # Will be determined from the first dataset
-
-        # Normalization statistics
+        
+        # Normalization stats
         self.input_mean: Optional[torch.Tensor] = None
         self.input_std: Optional[torch.Tensor] = None
         self.target_mean: Optional[torch.Tensor] = None
         self.target_std: Optional[torch.Tensor] = None
-        self._normalization_stats_computed_for_global_train: bool = False
 
     def _save_normalization_stats_to_json(self, file_path: str):
-        """Saves normalization statistics to a JSON file."""
-        if self.input_mean is None or self.input_std is None or \
-           self.target_mean is None or self.target_std is None:
-            print("Warning: Normalization stats are not computed. Cannot save.")
-            return
-
+        """Save normalization statistics to JSON file."""
         stats_dict = {
             "input_mean": self.input_mean.tolist(),
             "input_std": self.input_std.tolist(),
             "target_mean": self.target_mean.tolist(),
             "target_std": self.target_std.tolist()
         }
-        try:
-            with open(file_path, 'w') as f:
-                json.dump(stats_dict, f, indent=4)
-            print(f"  Normalization statistics saved to {file_path}")
-        except Exception as e:
-            print(f"  Error saving normalization statistics to {file_path}: {e}")
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        with open(file_path, 'w') as f:
+            json.dump(stats_dict, f, indent=4)
 
     def _load_all_datasets_once(self):
-        """Helper to load all ActuatorDataset instances if not already loaded."""
         if not self.datasets_by_group:
             print(f"DataModule: Discovering and loading CSV files from {len(self.hparams.inertia_groups)} inertia groups...")
-            
             total_csv_files = 0
-            dataset_sampling_frequencies = []
-            
             for group_config in self.hparams.inertia_groups:
                 group_id = group_config.get('id')
                 group_folder = group_config.get('folder')
                 group_inertia = group_config.get('inertia')
                 
+                
+                # Validation
                 if not group_id or not group_folder or group_inertia is None:
                     raise ValueError(f"Group config missing 'id', 'folder', or 'inertia': {group_config}")
-                
-                # Build path to group's subfolder
                 group_path = os.path.join(self.hparams.data_base_dir, group_folder)
-                
                 if not os.path.exists(group_path):
                     print(f"Warning: Group folder does not exist: {group_path}. Skipping group '{group_id}'.")
                     continue
-                
-                # Find all CSV files in this group's folder
                 csv_pattern = os.path.join(group_path, "*.csv")
                 csv_files = glob.glob(csv_pattern)
-                
                 if not csv_files:
                     print(f"Warning: No CSV files found in {group_path}. Skipping group '{group_id}'.")
                     continue
-                
-                # Sort for consistent ordering
                 csv_files.sort()
-                
                 print(f"  Group '{group_id}' (inertia={group_inertia}): Found {len(csv_files)} CSV files in {group_path}")
                 
-                # Load each CSV file as an ActuatorDataset
+                
                 group_datasets = []
                 for csv_file in csv_files:
                     try:
+                        # Determine if data is synthetic based on whether synthetic_data_frequency_hz is set
+                        is_synthetic = self.hparams.synthetic_data_frequency_hz is not None
+                        
                         dataset_instance = ActuatorDataset(
                             csv_file_path=csv_file,
                             inertia=group_inertia,
                             radius_accel=self.hparams.radius_accel,
-                            sequence_duration_s=self.hparams.sequence_duration_s, # Pass to dataset
-                            gyro_axis_for_ang_vel=self.hparams.gyro_axis_for_ang_vel,
-                            accel_axis_for_torque=self.hparams.accel_axis_for_torque,
-                            target_name=self.hparams.target_name,
+                            sequence_length_timesteps=self.sequence_length_timesteps,
+                            resampling_frequency_hz=self.hparams.resampling_frequency_hz,
+                            main_gyro_axis=self.hparams.main_gyro_axis,
+                            main_accel_axis=self.hparams.main_accel_axis,
                             filter_cutoff_freq_hz=self.hparams.filter_cutoff_freq_hz,
-                            filter_order=self.hparams.filter_order
+                            filter_order=self.hparams.filter_order,
+                            is_synthetic_data=is_synthetic,
                         )
                         group_datasets.append(dataset_instance)
-                        dataset_sampling_frequencies.append(dataset_instance.get_sampling_frequency())
                         total_csv_files += 1
-                        print(f"    Loaded {os.path.basename(csv_file)}: {len(dataset_instance)} sequences")
-                        # Set sequence_length_timesteps from the first successfully loaded dataset
-                        if self.sequence_length_timesteps is None:
-                            self.sequence_length_timesteps = dataset_instance.get_sequence_length_timesteps()
+                        print(f"    Loaded {os.path.basename(csv_file)}: {len(dataset_instance)} sequences (target Fs: {self.sampling_frequency:.2f} Hz)")
                     except Exception as e:
                         print(f"    Error loading {csv_file}: {e}")
                         continue
-                
+                    
                 if group_datasets:
                     self.datasets_by_group[group_id] = group_datasets
                     self.ordered_group_ids.append(group_id)
                     print(f"    Total sequences for group '{group_id}': {sum(len(ds) for ds in group_datasets)}")
                 else:
                     print(f"    No valid datasets loaded for group '{group_id}'")
-            
             if not self.datasets_by_group:
                 raise RuntimeError("No datasets were loaded from any inertia group.")
-
-            if self.sequence_length_timesteps is None:
-                raise RuntimeError("Sequence length in timesteps could not be determined from any dataset.")
-
-            if dataset_sampling_frequencies:
-                self.sampling_frequency = dataset_sampling_frequencies[0]
-                print(f"DataModule: Base sampling frequency: {self.sampling_frequency:.2f} Hz")
-            
+            print(f"DataModule: Enforcing target sampling frequency: {self.sampling_frequency:.2f} Hz")
             print(f"DataModule: Loaded {total_csv_files} CSV files from {len(self.datasets_by_group)} inertia groups.")
             print(f"  Input dim: {self.input_dim}, Sequence length (timesteps): {self.sequence_length_timesteps}")
 
@@ -205,7 +178,7 @@ class ActuatorDataModule(pl.LightningDataModule):
         all_inputs_flattened = []
         all_targets = []
 
-        for x_batch, y_batch in temp_loader:
+        for x_batch, y_batch, _ in temp_loader: # Unpack and ignore timestamps
             # x_batch: (batch_size, seq_len, input_dim)
             # y_batch: (batch_size, 1) or (batch_size,)
             all_inputs_flattened.append(x_batch.reshape(-1, x_batch.size(-1))) # Flatten seq_len into batch dim
@@ -451,114 +424,3 @@ class ActuatorDataModule(pl.LightningDataModule):
         print("Warning: Target normalization stats requested but not computed or available.")
         return None
 
-
-if __name__ == '__main__':
-    print("Testing ActuatorDataModule with grouped CSV files structure...")
-    
-    # Create test directory structure
-    test_base_dir = "test_data_dm"
-    os.makedirs(test_base_dir, exist_ok=True)
-    
-    # Create inertia groups configuration
-    inertia_groups_config = [
-        {'id': 'mass_low', 'folder': 'low_inertia', 'inertia': 0.01},
-        {'id': 'mass_med', 'folder': 'med_inertia', 'inertia': 0.02},
-        {'id': 'mass_high', 'folder': 'high_inertia', 'inertia': 0.03}
-    ]
-    
-    fs_main_test_dm = 100
-    created_files = []
-    
-    try:
-        # Create dummy CSV files for each group
-        for group_config in inertia_groups_config:
-            group_folder = os.path.join(test_base_dir, group_config['folder'])
-            os.makedirs(group_folder, exist_ok=True)
-            
-            # Create 2-3 CSV files per group
-            num_files = 2 if group_config['id'] == 'mass_low' else 3
-            for file_idx in range(num_files):
-                num_rows_dm = 200 + file_idx * 50
-                dt_main_test_dm = 1.0 / fs_main_test_dm
-                time_ms_main_test_dm = np.arange(0, num_rows_dm * dt_main_test_dm, dt_main_test_dm) * 1000
-                
-                inertia_factor = group_config['inertia'] * 10  # Scale for variation
-                dummy_data_dm_df = pd.DataFrame({
-                    'Time_ms': time_ms_main_test_dm,
-                    'Encoder_Angle': 90 * np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000),
-                    'Commanded_Angle': 90*np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000 + np.pi/(4+file_idx)),
-                    'Acc_X': np.random.randn(num_rows_dm)*(0.5+inertia_factor),
-                    'Acc_Y': np.sin(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000)*10 + np.random.randn(num_rows_dm)*0.1,
-                    'Acc_Z': 9.81 + np.random.randn(num_rows_dm)*(0.5+inertia_factor),
-                    'Gyro_X': np.random.randn(num_rows_dm)*(5+inertia_factor),
-                    'Gyro_Y': np.random.randn(num_rows_dm)*(5+inertia_factor),
-                    'Gyro_Z': (90*0.017453*(0.5+inertia_factor)*2*np.pi)*np.cos(2*np.pi*(0.5+inertia_factor)*time_ms_main_test_dm/1000)/0.017453 + np.random.randn(num_rows_dm)*0.5,
-                })
-                
-                csv_filename = f"run_{file_idx + 1}.csv"
-                csv_path = os.path.join(group_folder, csv_filename)
-                dummy_data_dm_df.to_csv(csv_path, index=False)
-                created_files.append(csv_path)
-        
-        print(f"Created test directory structure with {len(created_files)} CSV files across {len(inertia_groups_config)} groups.")
-
-        # Test the new ActuatorDataModule
-        dm_instance = ActuatorDataModule(
-            data_base_dir=test_base_dir,
-            inertia_groups=inertia_groups_config,
-            radius_accel=0.2,
-            gyro_axis_for_ang_vel='Gyro_Z', 
-            accel_axis_for_torque='Acc_Y',
-            batch_size=16, 
-            num_workers=0,
-            global_train_ratio=0.7, 
-            global_val_ratio=0.15,
-            seed=123,
-            filter_cutoff_freq_hz=50.0,
-            filter_order=4
-        )
-
-        # --- Test Global Split Mode ---
-        print("\n--- Testing Global Split Mode ---")
-        dm_instance.setup_for_global_run()
-        
-        train_loader_global = dm_instance.train_dataloader()
-        val_loader_global = dm_instance.val_dataloader()
-        test_loader_global = dm_instance.test_dataloader()
-
-        print(f"  Global Train loader: {len(train_loader_global.dataset) if train_loader_global else 'N/A'} samples")
-        print(f"  Global Val loader: {len(val_loader_global.dataset) if val_loader_global else 'N/A'} samples")
-        print(f"  Global Test loader: {len(test_loader_global.dataset) if test_loader_global else 'N/A'} samples")
-        
-        if train_loader_global and len(train_loader_global) > 0:
-            X_batch_train_g, y_batch_train_g = next(iter(train_loader_global))
-            print(f"  Global Train X batch shape: {X_batch_train_g.shape}, y batch shape: {y_batch_train_g.shape}")
-
-        # --- Test LOMO CV Fold Mode ---
-        print("\n--- Testing LOMO CV Fold Mode ---")
-        num_folds_to_test = dm_instance.get_num_lomo_folds()
-        
-        for fold_idx_dm in range(min(2, num_folds_to_test)):  # Test first 2 folds
-            print(f"\n--- Setting up LOMO Fold {fold_idx_dm + 1}/{num_folds_to_test} ---")
-            dm_instance.setup_for_lomo_fold(fold_idx_dm)
-            
-            train_loader_lomo = dm_instance.train_dataloader()
-            val_loader_lomo = dm_instance.val_dataloader()
-            test_loader_lomo = dm_instance.test_dataloader()
-
-            print(f"  LOMO Fold {fold_idx_dm + 1} Train loader: {len(train_loader_lomo.dataset) if train_loader_lomo and train_loader_lomo.dataset else 'N/A'} samples")
-            print(f"  LOMO Fold {fold_idx_dm + 1} Val loader (unseen): {len(val_loader_lomo.dataset) if val_loader_lomo else 'N/A'} samples")
-            print(f"  LOMO Fold {fold_idx_dm + 1} Test loader (unseen): {len(test_loader_lomo.dataset) if test_loader_lomo else 'N/A'} samples")
-
-        print("\nActuatorDataModule with grouped CSV structure passes basic tests.")
-        
-    except Exception as e_dm:
-        print(f"Error during ActuatorDataModule test: {e_dm}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Clean up test files and directories
-        import shutil
-        if os.path.exists(test_base_dir):
-            shutil.rmtree(test_base_dir)
-            print(f"\nCleaned up test directory: {test_base_dir}") 
