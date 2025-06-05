@@ -31,12 +31,8 @@ class GRUModel(nn.Module):
         # hn output: (num_layers, batch_size, hidden_dim)
         gru_out, h_next = self.gru(x, h0)
         
-        # We only want the output from the last time step for prediction
-        # If x is a single time step (seq_len=1), out[:, -1, :] correctly takes that step's output.
-        # out shape: (batch_size, hidden_dim)
-        out_last_step = gru_out[:, -1, :] 
-        
-        # Pass through the fully connected layer
-        # out shape: (batch_size, output_dim)
-        prediction = self.fc(out_last_step)
-        return prediction, h_next 
+        # Apply the fully connected layer at each timestep (time-distributed)
+        # gru_out: (batch_size, seq_len, hidden_dim)
+        # prediction_seq: (batch_size, seq_len, output_dim)
+        prediction_seq = self.fc(gru_out)
+        return prediction_seq, h_next 

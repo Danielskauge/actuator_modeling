@@ -158,14 +158,16 @@ class ActuatorDataset(Dataset):
             )
 
         X_np = np.array([feature_data[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
-        # The target corresponds to the state at the *end* of the sequence
-        y_np = np.array([target_data[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
-        # The timestamp corresponds to the time of the target y
-        timestamps_np = np.array([timestamps_numeric[i + self.sequence_length_timesteps - 1] for i in range(num_samples)])
+        # The targets correspond to torque sequences for each timestep in the sequence
+        y_np = np.array([target_data[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
+        # The timestamps correspond to each timestep in the sequence
+        timestamps_np = np.array([timestamps_numeric[i : i + self.sequence_length_timesteps] for i in range(num_samples)])
         
         X_tensor = torch.from_numpy(X_np).float()
-        y_tensor = torch.from_numpy(y_np).float().unsqueeze(1) # Target shape: [num_samples, 1]
-        timestamps_tensor = torch.from_numpy(timestamps_np).float().unsqueeze(1) # Timestamps shape: [num_samples, 1]
+        # Targets: shape [num_samples, seq_len] → add last dim to get [num_samples, seq_len, 1]
+        y_tensor = torch.from_numpy(y_np).float().unsqueeze(-1)
+        # Timestamps: same shape as targets
+        timestamps_tensor = torch.from_numpy(timestamps_np).float().unsqueeze(-1)
 
         return X_tensor, y_tensor, timestamps_tensor
 

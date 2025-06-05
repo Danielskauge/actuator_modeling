@@ -136,19 +136,14 @@ class TestPredictionPlotter(Callback):
         print(f"[Callback] targets_tensor shape: {getattr(targets_tensor, 'shape', None)}")
         print(f"[Callback] timestamps_tensor shape: {getattr(timestamps_tensor, 'shape', None)}")
 
-        # Ensure we have data and process tensors
-        if preds_tensor is None or targets_tensor is None or timestamps_tensor is None or \
-           preds_tensor.numel() == 0 or targets_tensor.numel() == 0 or timestamps_tensor.numel() == 0:
-            print("[Callback] No test predictions, targets, or timestamps available to plot (initial or empty check).")
-            return
-
         # Move to CPU and convert to NumPy
         try:
-            preds_np = preds_tensor.cpu().numpy().squeeze()
-            targets_np = targets_tensor.cpu().numpy().squeeze()
-            timestamps_np = timestamps_tensor.cpu().numpy().squeeze()
+            # Flatten sequence outputs into 1D
+            preds_np = preds_tensor.cpu().numpy().reshape(-1)
+            targets_np = targets_tensor.cpu().numpy().reshape(-1)
+            timestamps_np = timestamps_tensor.cpu().numpy().reshape(-1)
         except Exception as e:
-            print(f"[Callback] Error converting tensors to NumPy: {e}. Skipping plots.")
+            print(f"[Callback] Error converting tensors to NumPy or flattening: {e}. Skipping plots.")
             return
 
         # Log basic stats
@@ -397,13 +392,14 @@ class DebugTestTimeSeriesPlotter(Callback):
             print("DEBUG Plotter: No test predictions, targets, or timestamps available. Skipping plot.")
             return
         
-        # Ensure tensors are on CPU for numpy conversion
+        # Move to CPU and convert to NumPy
         try:
-            preds_np = preds_tensor.cpu().numpy().squeeze()
-            targets_np = targets_tensor.cpu().numpy().squeeze()
-            timestamps_np = timestamps_tensor.cpu().numpy().squeeze()
+            # Flatten sequence outputs into 1D
+            preds_np = preds_tensor.cpu().numpy().reshape(-1)
+            targets_np = targets_tensor.cpu().numpy().reshape(-1)
+            timestamps_np = timestamps_tensor.cpu().numpy().reshape(-1)
         except Exception as e:
-            print(f"DEBUG Plotter: Error converting tensors to NumPy: {e}. Skipping plot.")
+            print(f"DEBUG Plotter: Error converting tensors to NumPy or flattening: {e}. Skipping plot.")
             return
 
         if not (preds_np.ndim == 1 and targets_np.ndim == 1 and timestamps_np.ndim == 1 and \

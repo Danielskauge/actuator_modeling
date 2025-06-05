@@ -131,7 +131,7 @@ class ActuatorModel(pl.LightningModule):
         x shape: [batch_size, seq_len, input_dim]
         h_prev shape: [num_layers, batch_size, hidden_dim]
         Returns: 
-            prediction: [batch_size, output_dim] (typically output_dim=1)
+            prediction: [batch_size, seq_len, output_dim] (typically output_dim=1)
             h_next: [num_layers, batch_size, hidden_dim]
         """
         return self.model(x, h_prev)
@@ -222,8 +222,10 @@ class ActuatorModel(pl.LightningModule):
         Now expects batch to include timestamps.
         """
         x, y_measured_torque_raw, timestamps = batch # x raw, y_measured_torque_raw is in physical units, timestamps are floats
-        y_measured_torque_raw = y_measured_torque_raw.squeeze(-1) # Shape [batch] #TODO needs update for many-to-many formulation
-        timestamps = timestamps.squeeze(-1) # Shape [batch]
+        # y_measured_torque_raw: (batch, seq_len, 1) → (batch, seq_len)
+        y_measured_torque_raw = y_measured_torque_raw.squeeze(-1)  # Shape: [batch, seq_len]
+        # timestamps: (batch, seq_len, 1) → (batch, seq_len)
+        timestamps = timestamps.squeeze(-1)  # Shape: [batch, seq_len]
 
         # 1. Normalize inputs (x)
         # Ensure input_mean and input_std are correctly shaped for broadcasting over (batch, seq_len, features)
@@ -236,8 +238,10 @@ class ActuatorModel(pl.LightningModule):
         # For training/val/test steps, we don't pass or use the hidden state between batches here.
         # The GRU layer itself handles hidden state propagation *within* the input sequence x.
         # The forward signature change is primarily for the JIT export to support stateful inference.
-        y_hat_model_output_normalized, _ = self(x_normalized) # h_prev is None, h_next is ignored here
-        y_hat_model_output_normalized = y_hat_model_output_normalized.squeeze(-1) # Output shape: [batch]
+        # Predict torque at each time step: (batch, seq_len, 1)
+        y_hat_seq_norm, _ = self(x_normalized)
+        # Remove channel dim → shape: (batch, seq_len)
+        y_hat_model_output_normalized = y_hat_seq_norm.squeeze(-1)
 
         # 3. Normalize the raw target torque for loss calculation
         # target_mean/std are likely (1,) or scalar. Ensure they broadcast with y_measured_torque_raw [batch]
