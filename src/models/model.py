@@ -18,13 +18,13 @@ class ActuatorModel(pl.LightningModule):
     """
     Lightning module for actuator torque prediction using GRU.
     Can operate in direct prediction mode or residual prediction mode.
-    Expects input sequences of length 2. Number of features per step is 3 after removing target_ang_vel.
-    Feature order for tau_phys (if calculated from sequence): current_angle, target_angle, current_ang_vel.
+    Expects input sequences of arbitrary length. Number of features per step is 4: current_angle, target_angle, current_ang_vel, previous torque.
+    Feature order: [current_angle, target_angle, current_ang_vel, previous_torque].
     """
     
     def __init__(
         self,
-        input_dim: int,         # Expect 3 from DataModule (ActuatorDataset.INPUT_DIM)
+        input_dim: int,         # Expect 4 from DataModule (ActuatorDataset.INPUT_DIM)
         # Normalization stats from DataModule
         input_mean: torch.Tensor,
         input_std: torch.Tensor,
@@ -50,7 +50,7 @@ class ActuatorModel(pl.LightningModule):
         Initialize ActuatorModel.
         
         Args:
-            input_dim: Dimension of input features (per timestep for GRU). Should be 3.
+            input_dim: Dimension of input features (per timestep for GRU). Should be 4.
             input_mean: Mean of input features for normalization.
             input_std: Standard deviation of input features for normalization.
             target_mean: Mean of target variable for normalization.
@@ -80,8 +80,8 @@ class ActuatorModel(pl.LightningModule):
         self.register_buffer("target_mean", target_mean)
         self.register_buffer("target_std", target_std)
 
-        if self.hparams.input_dim != 3: # Check for 3 features now
-            print(f"Warning: ActuatorModel input_dim={self.hparams.input_dim}, but expected 3 after removing target_ang_vel.")
+        if self.hparams.input_dim != 4:
+            print(f"Warning: ActuatorModel input_dim={self.hparams.input_dim}, but expected 4 after adding previous torque feature.")
 
         self.use_residual = use_residual
         self.k_spring = k_spring
@@ -94,7 +94,7 @@ class ActuatorModel(pl.LightningModule):
         self.pd_no_load_speed_phys_training = pd_no_load_speed_phys_training
 
         self.model = GRUModel(
-            input_dim=self.hparams.input_dim, # GRU input_dim is per step (3)
+            input_dim=self.hparams.input_dim, # GRU input_dim is per step (4)
             hidden_dim=self.hparams.gru_hidden_dim, 
             num_layers=self.hparams.gru_num_layers,
             output_dim=1, 

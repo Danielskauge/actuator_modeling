@@ -144,7 +144,12 @@ class ActuatorDataset(Dataset):
 
     def _create_sequences(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Creates sequences of features, corresponding targets, and timestamps for targets."""
-        feature_data = self.data_df[['angle_rad', 'target_angle_rad', 'ang_vel_rad']].values
+        # Build features including previous torque
+        raw_features = self.data_df[['angle_rad', 'target_angle_rad', 'ang_vel_rad']].values
+        torque_values = self.data_df['torque'].values
+        # Shift torque by one timestep as previous torque; pad start with zero
+        torque_prev = np.concatenate(([0.0], torque_values[:-1]))
+        feature_data = np.column_stack((raw_features, torque_prev))
         target_data = self.data_df['torque'].values
         # Now that time starts from 0, we can use it directly as float seconds
         timestamps_numeric = self.data_df.index.values
@@ -182,7 +187,8 @@ class ActuatorDataset(Dataset):
 
     @staticmethod
     def get_input_dim() -> int:
-        return 3
+        # Now includes previous torque as an extra input feature
+        return 4
 
     def get_sequence_length_timesteps(self) -> int:
         """Returns the actual sequence length in timesteps for this dataset instance."""
