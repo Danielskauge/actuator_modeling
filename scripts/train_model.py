@@ -392,6 +392,16 @@ def train_actuator_model(cfg: DictConfig) -> None:
                     id=wandb.util.generate_id() 
                 )
                 wandb_logger_fold.watch(model_fold, log='all', log_freq=cfg.wandb.get("watch_log_freq", 100))
+                # Log held-out group info to WandB config and print after run start
+                held_out_group_id = datamodule.ordered_group_ids[fold_idx]
+                held_out_csv_files = len(datamodule.datasets_by_group[held_out_group_id])
+                held_out_sequences = len(datamodule.current_fold_val_dataset)
+                wandb_logger_fold.experiment.config.update({
+                    'held_out_group': held_out_group_id,
+                    'held_out_csv_files': held_out_csv_files,
+                    'held_out_sequences': held_out_sequences
+                })
+                print(f"  Held-out group '{held_out_group_id}' for Val/Test in Fold {fold_idx + 1}: {held_out_sequences} sequences from {held_out_csv_files} CSV files")
             
             trainer_fold = pl.Trainer(
                 max_epochs=cfg.train.max_epochs,

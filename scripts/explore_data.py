@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 import shutil
+import numpy as np
+from scipy import signal
+from scipy import interpolate
+from scipy.signal import butter, filtfilt
 
 # Key columns expected in the CSV files, based on README.md
 KEY_COLUMNS = [
@@ -27,29 +31,422 @@ PLOT_COLUMNS = [col for col in KEY_COLUMNS if col != 'Time_ms']
 # Columns for specific plot types
 ACCEL_COLS = ['Acc_X', 'Acc_Y', 'Acc_Z']
 GYRO_COLS = ['Gyro_X', 'Gyro_Y', 'Gyro_Z']
-# Commanded_Angle is also in PLOT_COLUMNS for individual histogram/timeseries if not handled by PSD explicitly
 PSD_TARGET_COLS = ACCEL_COLS + ['Commanded_Angle', 'Gyro_Z', 'Encoder_Angle']
 INDIVIDUAL_TIMESERIES_COLS = ['Encoder_Angle', 'Commanded_Angle']
-    
 
-def explore_data(data_dir: Path, output_dir: Path):
+# Torque calculation parameters (from default config)
+DEFAULT_INERTIA = 0.013  # kg*m^2
+DEFAULT_RADIUS_ACCEL = 0.03  # meters
+DEFAULT_FILTER_CUTOFF = 15.0  # Hz
+DEFAULT_FILTER_ORDER = 4
+DEFAULT_RESAMPLING_FREQ = 240.0  # Hz
+
+def downsample_for_plotting(df, max_points=10000):
+    """Downsample data for faster plotting while preserving overall shape."""
+    if len(df) <= max_points:
+        return df
+    
+    # Take every nth point to reduce to approximately max_points
+    step = len(df) // max_points
+    return df.iloc[::step].copy()
+
+def calculate_torque_processing_stages(df, inertia=DEFAULT_INERTIA, radius_accel=DEFAULT_RADIUS_ACCEL, 
+                                     resampling_freq=DEFAULT_RESAMPLING_FREQ, 
+                                     filter_cutoff=DEFAULT_FILTER_CUTOFF, 
+                                     filter_order=DEFAULT_FILTER_ORDER):
+    """
+    Calculate torque at different processing stages to show the effect of resampling and filtering.
+    Returns a DataFrame with time and torque columns for each stage.
+    """
+    if 'Acc_Y' not in df.columns or 'Time_ms' not in df.columns:
+        return None
+    
+    # Convert time to seconds and normalize to start from 0
+    df_work = df.copy()
+    df_work['time_s'] = df_work['Time_ms'] / 1000.0
+    df_work['time_s'] = df_work['time_s'] - df_work['time_s'].min()
+    df_work = df_work.set_index('time_s')
+    df_work = df_work.sort_index()
+    
+    # Remove first 5 seconds like ActuatorDataset does
+    df_work = df_work[df_work.index >= 5.0]
+    
+    if len(df_work) < 10:  # Not enough data
+        return None
+    
+    # Stage 1: Original torque (raw accelerometer data)
+    torque_original = inertia * df_work['Acc_Y'] / radius_accel
+    
+    # Calculate original sampling frequency
+    times = df_work.index.values
+    if len(times) > 1:
+        original_sampling_frequency = 1.0 / np.median(np.diff(times))
+    else:
+        return None
+    
+    # Stage 2: Resampled torque
+    if resampling_freq and resampling_freq != original_sampling_frequency:
+        start_time = df_work.index.min()
+        end_time = df_work.index.max()
+        dt = 1.0 / resampling_freq
+        new_times = np.arange(start_time, end_time + dt, dt)
+        
+        # Interpolate Acc_Y data
+        f = interpolate.interp1d(df_work.index.values, df_work['Acc_Y'].values, 
+                               kind='linear', bounds_error=False, fill_value='extrapolate')
+        acc_y_resampled = f(new_times)
+        torque_resampled = inertia * acc_y_resampled / radius_accel
+        
+        # Create resampled dataframe
+        df_resampled = pd.DataFrame({
+            'time_s': new_times,
+            'torque_resampled': torque_resampled
+        }).set_index('time_s')
+        
+        sampling_freq_for_filter = resampling_freq
+    else:
+        # No resampling
+        df_resampled = pd.DataFrame({
+            'torque_resampled': torque_original
+        }, index=df_work.index)
+        sampling_freq_for_filter = original_sampling_frequency
+    
+    # Stage 3: Filtered torque
+    if filter_cutoff and filter_cutoff > 0:
+        nyquist_freq = 0.5 * sampling_freq_for_filter
+        if filter_cutoff < nyquist_freq:
+            Wn = filter_cutoff / nyquist_freq
+            b, a = butter(filter_order, Wn, btype='low', analog=False)
+            torque_filtered = filtfilt(b, a, df_resampled['torque_resampled'].values)
+        else:
+            torque_filtered = df_resampled['torque_resampled'].values
+    else:
+        torque_filtered = df_resampled['torque_resampled'].values
+    
+    # Combine results into a single DataFrame
+    result_df = df_resampled.copy()
+    result_df['torque_filtered'] = torque_filtered
+    
+    # Add original torque by interpolating to the resampled timeline
+    f_orig = interpolate.interp1d(df_work.index.values, torque_original.values, 
+                                kind='linear', bounds_error=False, fill_value='extrapolate')
+    result_df['torque_original'] = f_orig(result_df.index.values)
+    
+    return result_df
+
+def generate_torque_comparison_plot(df, output_dir, file_stem, max_window_s=10):
+    """Generate a plot comparing original, resampled, and filtered torque over a max 10s window."""
+    torque_df = calculate_torque_processing_stages(df)
+    
+    if torque_df is None or len(torque_df) == 0:
+        print(f"        Cannot generate torque plot - insufficient data or missing columns")
+        return
+    
+    # Limit to max window
+    if max_window_s:
+        start_time = torque_df.index.min()
+        end_time = min(start_time + max_window_s, torque_df.index.max())
+        torque_df_plot = torque_df[(torque_df.index >= start_time) & (torque_df.index <= end_time)]
+    else:
+        torque_df_plot = torque_df
+    
+    if len(torque_df_plot) == 0:
+        return
+    
+    plt.figure(figsize=(15, 8))
+    
+    # Plot all three torque signals
+    plt.plot(torque_df_plot.index, torque_df_plot['torque_original'], 
+             label='Original (Raw)', linewidth=0.8, alpha=0.7)
+    plt.plot(torque_df_plot.index, torque_df_plot['torque_resampled'], 
+             label='Resampled', linewidth=0.8, alpha=0.8)
+    plt.plot(torque_df_plot.index, torque_df_plot['torque_filtered'], 
+             label='Filtered', linewidth=1.0)
+    
+    # Add horizontal lines for reference
+    plt.axhline(y=3.6, color='red', linestyle='--', alpha=0.7, label='Max Torque Limit (3.6 Nm)')
+    plt.axhline(y=-3.6, color='red', linestyle='--', alpha=0.7)
+    plt.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+    
+    plt.title(f'Torque Comparison: Processing Stages - {file_stem}')
+    plt.xlabel('Time (s)')
+    plt.ylabel('Torque (Nm)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Add statistics as text
+    stats_text = []
+    for col, label in [('torque_original', 'Original'), 
+                      ('torque_resampled', 'Resampled'), 
+                      ('torque_filtered', 'Filtered')]:
+        data = torque_df_plot[col]
+        stats_text.append(f'{label}: max={data.max():.2f}, min={data.min():.2f}, std={data.std():.2f} Nm')
+    
+    plt.text(0.02, 0.98, '\n'.join(stats_text), transform=plt.gca().transAxes, 
+             fontsize=9, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    plot_filename = output_dir / f"torque_comparison.png"
+    plt.savefig(plot_filename, dpi=100)
+    plt.close()
+    
+    # Print some statistics
+    max_orig = abs(torque_df_plot['torque_original']).max()
+    max_filt = abs(torque_df_plot['torque_filtered']).max()
+    print(f"        Torque stats - Max original: {max_orig:.2f} Nm, Max filtered: {max_filt:.2f} Nm")
+
+def process_single_file(csv_file: Path, file_output_dir: Path, plot_options: dict):
+    """Process a single CSV file and generate plots."""
+    print(f"    Processing file: {csv_file.name}")
+    
+    try:
+        df = pd.read_csv(csv_file)
+    except Exception as e:
+        print(f"      Error loading CSV '{csv_file.name}': {e}")
+        return None
+
+    if df.empty:
+        print(f"      File '{csv_file.name}' is empty. Skipping.")
+        return None
+
+    file_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"      Shape: {df.shape}")
+    
+    # Check for missing values
+    missing_values = df.isnull().sum()
+    if missing_values.sum() > 0:
+        print(f"      Missing values: {missing_values[missing_values > 0].to_dict()}")
+
+    # Ensure key columns are present
+    actual_key_cols = [col for col in KEY_COLUMNS if col in df.columns]
+    actual_plot_cols = [col for col in PLOT_COLUMNS if col in df.columns]
+
+    if not actual_key_cols:
+        print(f"      No key columns found. Skipping detailed analysis.")
+        return None
+
+    # Downsample for plotting speed
+    df_plot = downsample_for_plotting(df, plot_options['max_plot_points'])
+    if len(df_plot) < len(df):
+        print(f"      Downsampled from {len(df)} to {len(df_plot)} points for plotting")
+
+    # Prepare time column
+    time_col_for_plot = None
+    fs = None
+    if 'Time_ms' in df_plot.columns:
+        df_plot['Time_s'] = df_plot['Time_ms'] / 1000.0
+        time_col_for_plot = 'Time_s'
+        if df_plot[time_col_for_plot].nunique() > 1:
+            median_diff = df_plot[time_col_for_plot].diff().median()
+            if median_diff > 0:
+                fs = 1.0 / median_diff
+                print(f"      Estimated sampling frequency: {fs:.2f} Hz")
+
+    # Generate plots based on options
+    if plot_options['histograms'] and actual_plot_cols:
+        generate_histograms(df_plot, actual_plot_cols, file_output_dir, csv_file.stem)
+
+    if plot_options['timeseries'] and time_col_for_plot:
+        generate_timeseries(df_plot, time_col_for_plot, file_output_dir, csv_file.stem)
+    
+    # Generate torque comparison plot (using original df, not downsampled)
+    if plot_options['torque']:
+        generate_torque_comparison_plot(df, file_output_dir, csv_file.stem, max_window_s=plot_options['torque_window_s'])
+
+    if plot_options['psd'] and fs and fs > 0:
+        generate_psd_plots(df_plot, fs, file_output_dir, csv_file.stem, plot_options['max_psd_points'])
+
+    return {'rows': len(df), 'file_name': csv_file.name}
+
+def generate_histograms(df, plot_cols, output_dir, file_stem):
+    """Generate histogram plots."""
+    num_cols = len(plot_cols)
+    ncols = min(3, num_cols)
+    nrows = (num_cols + ncols - 1) // ncols
+    
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+    if num_cols == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+
+    for i, col in enumerate(plot_cols):
+        sns.histplot(df[col].dropna(), kde=True, ax=axes[i])
+        axes[i].set_title(f'{col}', fontsize=9)
+        axes[i].set_xlabel(col)
+        axes[i].set_ylabel('Frequency')
+    
+    # Hide unused subplots
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.suptitle(f'Histograms - {file_stem}', fontsize=12)
+    plt.tight_layout()
+    
+    plot_filename = output_dir / f"histograms.png"
+    plt.savefig(plot_filename, dpi=100)  # Reduced DPI for speed
+    plt.close()
+
+def generate_timeseries(df, time_col, output_dir, file_stem):
+    """Generate time series plots."""
+    # Accelerometer plot
+    accel_cols_present = [col for col in ACCEL_COLS if col in df.columns]
+    if accel_cols_present:
+        plt.figure(figsize=(12, 6))
+        for col in accel_cols_present:
+            plt.plot(df[time_col], df[col], label=col, linewidth=0.8)
+        plt.title(f'Accelerometer Data - {file_stem}')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Acceleration')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plot_filename = output_dir / f"accelerometer_timeseries.png"
+        plt.savefig(plot_filename, dpi=100)
+        plt.close()
+
+    # Gyroscope plot
+    gyro_cols_present = [col for col in GYRO_COLS if col in df.columns]
+    if gyro_cols_present:
+        plt.figure(figsize=(12, 6))
+        for col in gyro_cols_present:
+            plt.plot(df[time_col], df[col], label=col, linewidth=0.8)
+        plt.title(f'Gyroscope Data - {file_stem}')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Angular Velocity')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plot_filename = output_dir / f"gyroscope_timeseries.png"
+        plt.savefig(plot_filename, dpi=100)
+        plt.close()
+
+    # Angle comparison plot
+    if 'Commanded_Angle' in df.columns and 'Encoder_Angle' in df.columns:
+        plt.figure(figsize=(12, 6))
+        plt.plot(df[time_col], df['Commanded_Angle'], label='Commanded_Angle', linewidth=0.8)
+        plt.plot(df[time_col], df['Encoder_Angle'], label='Encoder_Angle', linewidth=0.8)
+        plt.title(f'Angle Comparison - {file_stem}')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Angle')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plot_filename = output_dir / f"angle_comparison_timeseries.png"
+        plt.savefig(plot_filename, dpi=100)
+        plt.close()
+
+def generate_psd_plots(df, fs, output_dir, file_stem, max_psd_points):
+    """Generate separate PSD plots for original method and Welch's method."""
+    psd_cols = [col for col in PSD_TARGET_COLS if col in df.columns]
+    valid_psd_cols = []
+    
+    for col in psd_cols:
+        if df[col].isnull().all() or df[col].nunique() < 2:
+            continue
+        valid_psd_cols.append(col)
+
+    if not valid_psd_cols:
+        return
+
+    # Limit data points for PSD to speed up computation
+    df_psd = df.copy()
+    if len(df_psd) > max_psd_points:
+        step = len(df_psd) // max_psd_points
+        df_psd = df_psd.iloc[::step]
+
+    num_plots = len(valid_psd_cols)
+    ncols = min(3, num_plots)
+    nrows = (num_plots + ncols - 1) // ncols
+    
+    # Original method plot
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    if num_plots == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+
+    nfft = min(256, len(df_psd) // 4)
+    
+    for i, col in enumerate(valid_psd_cols):
+        try:
+            axes[i].psd(df_psd[col].dropna(), NFFT=nfft, Fs=fs)
+            axes[i].set_title(f'PSD - {col}', fontsize=9)
+        except Exception as e:
+            print(f"        Error generating original PSD for {col}: {e}")
+    
+    # Hide unused subplots
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.suptitle(f'Power Spectral Density (Original Method) - {file_stem}', fontsize=12)
+    plt.tight_layout()
+    
+    plot_filename = output_dir / f"psd_plots_original.png"
+    plt.savefig(plot_filename, dpi=100)
+    plt.close()
+
+    # Welch method plot
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    if num_plots == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
+
+    nperseg = min(len(df_psd) // 8, 1024)
+    nperseg = max(nperseg, 64)
+    noverlap = nperseg // 2
+    
+    for i, col in enumerate(valid_psd_cols):
+        try:
+            data = df_psd[col].dropna().values
+            if len(data) < nperseg:
+                print(f"        Insufficient data for Welch PSD {col}")
+                continue
+            
+            frequencies, psd = signal.welch(
+                data, 
+                fs=fs, 
+                window='hann',
+                nperseg=nperseg,
+                noverlap=noverlap,
+                detrend='linear',
+                scaling='density'
+            )
+            
+            axes[i].semilogy(frequencies, psd)
+            axes[i].set_title(f'PSD - {col}', fontsize=9)
+            axes[i].set_xlabel('Frequency (Hz)')
+            axes[i].set_ylabel('PSD (units²/Hz)')
+            axes[i].grid(True, alpha=0.3)
+            
+        except Exception as e:
+            print(f"        Error generating Welch PSD for {col}: {e}")
+    
+    # Hide unused subplots
+    for j in range(i + 1, len(axes)):
+        fig.delaxes(axes[j])
+
+    fig.suptitle(f'Power Spectral Density (Welch Method) - {file_stem}', fontsize=12)
+    plt.tight_layout()
+    
+    plot_filename = output_dir / f"psd_plots_welch.png"
+    plt.savefig(plot_filename, dpi=100)
+    plt.close()
+
+def explore_data(data_dir: Path, output_dir: Path, plot_options: dict):
     """
     Explores data in CSV files within subdirectories of data_dir,
-    prints summaries, and saves plots to output_dir.
+    processing each file individually and saving plots per file.
     """
     if not data_dir.is_dir():
         print(f"Error: Data directory '{data_dir}' not found.")
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Saving exploration plots and summaries to: {output_dir.resolve()}")
+    print(f"Saving exploration plots to: {output_dir.resolve()}")
     
-    # Delete old plots
-    for item in output_dir.iterdir():
-        if item.is_file() and item.suffix == '.png':
-            item.unlink()
-        elif item.is_dir():
-            shutil.rmtree(item)
+    # Clear old plots
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
     print("Cleared old plots from output directory.")
 
     inertia_groups = [d for d in data_dir.iterdir() if d.is_dir()]
@@ -57,237 +454,58 @@ def explore_data(data_dir: Path, output_dir: Path):
         print(f"No subdirectories (inertia groups) found in '{data_dir}'.")
         return
 
-    group_data_counts = {}  # To store total rows per inertia group
+    group_summaries = {}
 
     for group_dir in inertia_groups:
         group_name = group_dir.name
         print(f"\nProcessing inertia group: {group_name}")
-        group_data_counts[group_name] = {'total_rows': 0, 'file_count': 0}
         
         group_output_dir = output_dir / group_name
-        group_output_dir.mkdir(parents=True, exist_ok=True)
-
         csv_files = list(group_dir.glob('*.csv'))
+        
         if not csv_files:
             print(f"  No CSV files found in '{group_dir}'.")
             continue
 
-        # Combine all CSV files in the group
-        combined_df = pd.DataFrame()
+        # Sort files for consistent ordering
+        csv_files.sort()
+        
+        # Limit to first file only if requested
+        if plot_options.get('first_only', False):
+            csv_files = csv_files[:1]
+            print(f"  Processing only first file: {csv_files[0].name}")
+        else:
+            print(f"  Found {len(csv_files)} CSV files")
+
+        file_summaries = []
+        total_rows = 0
+
         for csv_file in csv_files:
-            print(f"\n  Loading file: {csv_file.name}")
-            try:
-                df = pd.read_csv(csv_file)
-                combined_df = pd.concat([combined_df, df], ignore_index=True)
-                group_data_counts[group_name]['total_rows'] += df.shape[0]
-                group_data_counts[group_name]['file_count'] += 1
-            except Exception as e:
-                print(f"    Error loading CSV '{csv_file.name}': {e}")
-
-        if combined_df.empty:
-            print(f"  No valid data found in '{group_dir}'.")
-            continue
-
-        print("\n    Basic Information:")
-        combined_df.info()
-        print(f"      Shape: {combined_df.shape}")
-        
-        print("\n    Missing Values (per column):")
-        missing_values = combined_df.isnull().sum()
-        if missing_values.sum() == 0:
-            print("      No missing values found.")
-        else:
-            print(missing_values[missing_values > 0])
-
-        # Ensure all key columns are present, add if missing for describe/plot
-        for col in KEY_COLUMNS:
-            if col not in combined_df.columns:
-                print(f"      Warning: Key column '{col}' not found in combined data. Skipping for stats/plots.")
-        
-        actual_key_cols_in_df = [col for col in KEY_COLUMNS if col in combined_df.columns]
-        actual_plot_cols_for_hist_in_df = [col for col in PLOT_COLUMNS if col in combined_df.columns] # For histograms
-
-        if not actual_key_cols_in_df:
-            print(f"      No key columns found in combined data. Skipping detailed analysis.")
-            continue
+            file_output_dir = group_output_dir / csv_file.stem
+            summary = process_single_file(csv_file, file_output_dir, plot_options)
             
-        print("\n    Descriptive Statistics (for key columns):")
-        print(combined_df[actual_key_cols_in_df].describe())
+            if summary:
+                file_summaries.append(summary)
+                total_rows += summary['rows']
 
-        time_col_for_plot = None
-        fs = None
-        if 'Time_ms' in combined_df.columns:
-            combined_df['Time_s'] = combined_df['Time_ms'] / 1000.0
-            time_col_for_plot = 'Time_s'
-            if combined_df[time_col_for_plot].nunique() > 1:
-                median_diff = combined_df[time_col_for_plot].diff().median()
-                if median_diff > 0:
-                    fs = 1.0 / median_diff
-                    print(f"      Estimated sampling frequency: {fs:.2f} Hz")
-                else:
-                    print("      Warning: Could not estimate sampling frequency (median time diff <= 0). PSD plots may be unreliable or skipped.")
-            else:
-                print("      Warning: Not enough unique time points to estimate sampling frequency. PSD plots will be skipped.")
-        else:
-            print("      Warning: 'Time_ms' column not found. Cannot create time series plots or reliable PSD plots.")
+        group_summaries[group_name] = {
+            'total_rows': total_rows,
+            'file_count': len(file_summaries),
+            'files': file_summaries
+        }
 
-        # --- Plotting ---
-        # Histograms
-        if actual_plot_cols_for_hist_in_df:
-            print(f"\n    Generating combined histograms for plottable columns...")
-            num_cols = len(actual_plot_cols_for_hist_in_df)
-            # Adjust subplot layout dynamically, aim for ~3 columns
-            ncols_subplot = min(3, num_cols)
-            nrows_subplot = (num_cols + ncols_subplot - 1) // ncols_subplot # Ceiling division
-            
-            fig_hist, axes_hist = plt.subplots(nrows_subplot, ncols_subplot, figsize=(5 * ncols_subplot, 4 * nrows_subplot))
-            axes_hist = axes_hist.flatten() # Flatten in case of multi-dim array
+        print(f"  Completed {group_name}: {len(file_summaries)} files, {total_rows} total rows")
 
-            for i, col in enumerate(actual_plot_cols_for_hist_in_df):
-                sns.histplot(combined_df[col].dropna(), kde=True, ax=axes_hist[i])
-                axes_hist[i].set_title(f'Histogram of {col}', fontsize=9)
-                axes_hist[i].set_xlabel(col)
-                axes_hist[i].set_ylabel('Frequency')
-            
-            # Hide any unused subplots
-            for j in range(i + 1, len(axes_hist)):
-                fig_hist.delaxes(axes_hist[j])
-
-            fig_hist.suptitle(f'Histograms of Key Features\n({group_name})', fontsize=12, y=1.0) # Adjust y to prevent overlap
-            plt.tight_layout(rect=[0, 0, 1, 0.98]) # Adjust rect to make space for suptitle
-            plot_filename = group_output_dir / f"ALL_Features_histograms.png"
-            plt.savefig(plot_filename)
-            plt.close(fig_hist)
-            print(f"      Combined histograms saved to {plot_filename}")
-
-        # Combined Time Series Plots
-        accel_cols_present = [col for col in ACCEL_COLS if col in combined_df.columns]
-        gyro_cols_present = [col for col in GYRO_COLS if col in combined_df.columns]
-
-        if time_col_for_plot:
-            if accel_cols_present:
-                print(f"\n    Generating combined time series plot for Accelerometer data...")
-                plt.figure(figsize=(12, 6))
-                for col in accel_cols_present:
-                    sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df[col], label=col)
-                plt.title(f'Accelerometer Data vs. Time\n({group_name})', fontsize=10)
-                plt.xlabel('Time (s)')
-                plt.ylabel('Acceleration') # General unit
-                plt.legend()
-                plot_filename = group_output_dir / f"ACC_XYZ_timeseries.png"
-                plt.savefig(plot_filename)
-                plt.close()
-                print(f"      Accelerometer combined time series plot saved to {plot_filename}")
-
-            if gyro_cols_present:
-                print(f"\n    Generating combined time series plot for Gyroscope data...")
-                plt.figure(figsize=(12, 6))
-                for col in gyro_cols_present:
-                    sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df[col], label=col)
-                plt.title(f'Gyroscope Data vs. Time\n({group_name})', fontsize=10)
-                plt.xlabel('Time (s)')
-                plt.ylabel('Angular Velocity') # General unit
-                plt.legend()
-                plot_filename = group_output_dir / f"GYRO_XYZ_timeseries.png"
-                plt.savefig(plot_filename)
-                plt.close()
-                print(f"      Gyroscope combined time series plot saved to {plot_filename}")
-        
-        # Combined Time Series Plot for Commanded and Encoder Angle
-        if time_col_for_plot and 'Commanded_Angle' in combined_df.columns and 'Encoder_Angle' in combined_df.columns:
-            print(f"\n    Generating combined time series plot for Commanded and Encoder Angle...")
-            plt.figure(figsize=(12, 6))
-            sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df['Commanded_Angle'], label='Commanded_Angle')
-            sns.lineplot(x=combined_df[time_col_for_plot], y=combined_df['Encoder_Angle'], label='Encoder_Angle')
-            plt.title(f'Commanded and Encoder Angle vs. Time\n({group_name})', fontsize=10)
-            plt.xlabel('Time (s)')
-            plt.ylabel('Angle')
-            plt.legend()
-            plot_filename = group_output_dir / f"Commanded_Encoder_Angle_timeseries.png"
-            plt.savefig(plot_filename)
-            plt.close()
-            print(f"      Combined time series plot for Commanded and Encoder Angle saved to {plot_filename}")
-        
-        # PSD Plots
-        psd_cols_to_plot = [col for col in PSD_TARGET_COLS if col in combined_df.columns]
-
-        if fs and psd_cols_to_plot:
-            print(f"\n    Generating combined PSD plots (Fs={fs:.2f} Hz)...")
-            # Only keep columns that will actually be plotted
-            valid_psd_cols = []
-            for col in psd_cols_to_plot:
-                if combined_df[col].isnull().all():
-                    print(f"      Skipping PSD for {col} as it contains all NaN values.")
-                    continue
-                if combined_df[col].nunique() < 2:
-                    print(f"      Skipping PSD for {col} as it has less than 2 unique values or is constant.")
-                    continue
-                nfft_val = min(256, len(combined_df[col].dropna()) - 1 if len(combined_df[col].dropna()) > 1 else 1)
-                if nfft_val <= 0:
-                    print(f"      Skipping PSD for {col} due to insufficient data points after dropna for NFFT.")
-                    continue
-                valid_psd_cols.append((col, nfft_val))
-
-            num_psd_plots = len(valid_psd_cols)
-            if num_psd_plots == 0:
-                print(f"      No PSD plots were generated for group {group_name}.")
-            else:
-                ncols_psd_subplot = min(3, num_psd_plots)
-                nrows_psd_subplot = (num_psd_plots + ncols_psd_subplot - 1) // ncols_psd_subplot
-                fig_psd, axes_psd = plt.subplots(nrows_psd_subplot, ncols_psd_subplot, figsize=(6 * ncols_psd_subplot, 4 * nrows_psd_subplot))
-                if num_psd_plots == 1:
-                    axes_psd = [axes_psd]
-                else:
-                    axes_psd = axes_psd.flatten()
-                for i, (col, nfft_val) in enumerate(valid_psd_cols):
-                    try:
-                        axes_psd[i].psd(combined_df[col].dropna(), NFFT=nfft_val, Fs=fs)
-                        axes_psd[i].set_title(f'PSD of {col}', fontsize=9)
-                    except Exception as e_psd:
-                        print(f"      Error generating PSD for {col}: {e_psd}")
-                # Hide any unused subplots
-                for j in range(i + 1, len(axes_psd)):
-                    fig_psd.delaxes(axes_psd[j])
-                fig_psd.suptitle(f'Power Spectral Density (PSD) Plots\n({group_name}, Fs={fs:.2f} Hz)', fontsize=12, y=1.0)
-                plt.tight_layout(rect=[0, 0, 1, 0.98])
-                plot_filename = group_output_dir / f"ALL_Features_PSD.png"
-                plt.savefig(plot_filename)
-                print(f"      Combined PSD plots saved to {plot_filename}")
-                plt.close(fig_psd)
-            
-        elif not fs and psd_cols_to_plot : # if there are cols to plot but fs is None
-             print(f"\n    Skipping PSD plots because sampling frequency (Fs) could not be determined or is invalid.")
-        
-        print(f"\n  Finished analysis for {group_name}")
-
-    # --- Summary of data amounts per group ---
-    print("\n--- Inertia Group Data Summary ---")
-    if not group_data_counts:
-        print("No data processed to summarize.")
-    else:
-        for group_name, counts in group_data_counts.items():
-            print(f"  Group: {group_name}, Total Rows: {counts['total_rows']}, Files: {counts['file_count']}")
-        
-        # Plotting the summary
-        group_names = list(group_data_counts.keys())
-        total_rows_list = [counts['total_rows'] for counts in group_data_counts.values()]
-
-        if group_names and total_rows_list:
-            plt.figure(figsize=(10, 6))
-            sns.barplot(x=group_names, y=total_rows_list)
-            plt.title('Total Data Rows per Inertia Group')
-            plt.xlabel('Inertia Group')
-            plt.ylabel('Total Number of Rows')
-            plt.xticks(rotation=45, ha="right")
-            plt.tight_layout()
-            summary_plot_filename = output_dir / "inertia_group_data_summary.png"
-            plt.savefig(summary_plot_filename)
-            plt.close()
-            print(f"\nSummary plot saved to: {summary_plot_filename}")
+    # Generate summary
+    print("\n--- Processing Summary ---")
+    for group_name, summary in group_summaries.items():
+        print(f"  {group_name}: {summary['file_count']} files, {summary['total_rows']} rows")
+        for file_info in summary['files']:
+            print(f"    {file_info['file_name']}: {file_info['rows']} rows")
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Explore actuator data CSV files, print summaries, and generate plots."
+        description="Explore actuator data CSV files, processing each file individually."
     )
     parser.add_argument(
         "--data_type",
@@ -300,22 +518,75 @@ def main():
         "--data_dir",
         type=Path,
         default=None,
-        help="Directory containing inertia group subfolders with CSV files. If not provided, defaults to ../data/<data_type>.",
+        help="Directory containing inertia group subfolders with CSV files.",
     )
     parser.add_argument(
-        
         "--output_dir",
         type=Path,
         default=Path(__file__).resolve().parent.parent / "exploration_plots",
-        help="Directory to save plots and summaries. Default: ../exploration_plots",
+        help="Directory to save plots. Default: ../exploration_plots",
     )
+    parser.add_argument(
+        "--max_plot_points",
+        type=int,
+        default=10000,
+        help="Maximum data points to use for plotting (for speed). Default: 10000",
+    )
+    parser.add_argument(
+        "--max_psd_points", 
+        type=int,
+        default=5000,
+        help="Maximum data points for PSD computation. Default: 5000",
+    )
+    parser.add_argument(
+        "--skip_histograms",
+        action="store_true",
+        help="Skip histogram generation",
+    )
+    parser.add_argument(
+        "--skip_timeseries",
+        action="store_true",
+        help="Skip time series plots",
+    )
+    parser.add_argument(
+        "--skip_torque",
+        action="store_true",
+        help="Skip torque comparison plots",
+    )
+    parser.add_argument(
+        "--skip_psd",
+        action="store_true",
+        help="Skip PSD plots",
+    )
+    parser.add_argument(
+        "--first_only",
+        action="store_true",
+        help="Process only the first CSV file in each group (for faster execution)",
+    )
+    parser.add_argument(
+        "--torque_window_s",
+        type=float,
+        default=5.0,
+        help="Maximum time window (in seconds) for torque comparison plot. Default: 10.0",
+    )
+    
     args = parser.parse_args()
 
     if args.data_dir is None:
         args.data_dir = Path(__file__).resolve().parent.parent / "data" / args.data_type
 
-    explore_data(args.data_dir, args.output_dir)
+    plot_options = {
+        'histograms': not args.skip_histograms,
+        'timeseries': not args.skip_timeseries,
+        'torque': not args.skip_torque,
+        'psd': not args.skip_psd,
+        'max_plot_points': args.max_plot_points,
+        'max_psd_points': args.max_psd_points,
+        'first_only': args.first_only,
+        'torque_window_s': args.torque_window_s,
+    }
 
+    explore_data(args.data_dir, args.output_dir, plot_options)
 
 if __name__ == "__main__":
     main()

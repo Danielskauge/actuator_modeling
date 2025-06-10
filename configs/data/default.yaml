@@ -6,32 +6,37 @@ _target_: src.data.datamodule.ActuatorDataModule
 # Base directory containing subfolders for each inertia group
 data_base_dir: "data/real"
 
-# List of inertia groups. Each group has an id, a subfolder name relative to data_base_dir,
-# and the inertia value (kg*m^2) for all CSVs in that subfolder.
+# List of inertia groups. Each group has an id and a subfolder name relative to data_base_dir.
+# The inertia value (kg*m^2) will be read from an inertia.yaml file in each subfolder.
 # The ActuatorDataModule will automatically discover all *.csv files in each 'folder'.
 inertia_groups:
-  - {id: "set_1", folder: "pos_A_300g", inertia: 0.004532}
-    {id: "mass_0_025", folder: "0.025kgm2", inertia: 0.0250}
-    {id: "mass_0_03", folder: "0.03kgm2", inertia: 0.0300}
+  - {id: "pos_A_300g", folder: "new_pos_A_300g_data"}
+  - {id: "pos_C_300g", folder: "new_pos_C_300g_data"}
+  - {id: "pos_D_300g", folder: "new_pos_D_300_g_data"}
+  - {id: "pos_E_300g", folder: "new_pos_E_300g_data"}
+  - {id: "no_mass", folder: "new_no_mass_data"}
 
 # Directory structure should be:
 # data/real/
-#   ├── 0.01kgm2/
-#   │   ├── run_1.csv
-#   │   ├── run_2.csv
+#   ├── new_pos_A_300g_data/
+#   │   ├── inertia.yaml  # Contains: inertia: <value>
+#   │   ├── new_pos_A__300g__data_1.csv
+#   │   ├── new_pos_A__300g__data_2.csv
 #   │   └── ...
-#   ├── 0.015kgm2/
-#   │   ├── trial_A.csv
-#   │   ├── trial_B.csv
+#   ├── new_pos_C_300g_data/
+#   │   ├── inertia.yaml  # Contains: inertia: <value>
+#   │   ├── <csv files>
 #   │   └── ...
-#   └── 0.02kgm2/
-#       ├── experiment_01.csv
-#       └── ...
+#   ├── new_pos_D_300_g_data/
+#   │   ├── inertia.yaml  # Contains: inertia: <value>
+#   │   ├── <csv files>
+#   │   └── ...
+#   └── <other folders with inertia.yaml and csv files>/
 
 # `features_to_use` is no longer needed here as ActuatorDataset defines its input features internally.
 # The input_dim for the model is dynamically determined by ActuatorDataset.get_input_dim()
 
-# Parameters for data splitting in 'global' evaluation mode
+# Parameters for data splitting in 'global' evaluation mode-
 # These are used when all data is aggregated before splitting.
 global_train_ratio: 0.7
 global_val_ratio: 0.15
@@ -42,14 +47,24 @@ batch_size: 256          # Batch size for training and evaluation
 num_workers: 4          # Number of worker processes for data loading
 
 # --- System Geometry (passed to ActuatorDataset) ---
-radius_accel: 0.2 # meters. Distance from rotation axis to tangential accelerometer.
+radius_accel: 0.03 # meters. Distance from rotation axis to tangential accelerometer.
 
 # --- Filter Parameters (passed to ActuatorDataset) ---
-filter_cutoff_freq_hz: 40.0 # Cutoff frequency in Hz for low-pass Butterworth filter
-filter_order: 4             # Order of the Butterworth filter
+filter_cutoff_freq_hz: 30.0 # Cutoff frequency in Hz for low-pass Butterworth filters
+filter_order: 6             # Order of the Butterworth filter
 
 # Sequence duration (seconds) for ActuatorDataset
 # sequence_length will be computed as round(sequence_duration_s * sampling_frequency)
 sequence_duration_s: 1.0 # Duration in seconds for each sequence; must be set in confi
 
-resampling_frequency_hz: 100.0 # Hz
+resampling_frequency_hz: 240.0 # Hz
+# Maximum allowed torque [Nm] for servo + spring combined
+max_torque_nm: 3.6 # Nm
+
+# --- Sensor Bias Correction ---
+# Biases estimated from static hold data (static_segment_plateau2.csv)
+sensor_biases:
+  acc_y_bias: 0.039204  # Accelerometer Y bias
+  gyro_z_bias: -0.002273  # Gyroscope Z bias
+# Maximum commanded angular velocity threshold (rad/s) for filtering sequences; set to null to disable
+max_commanded_vel: 10.0

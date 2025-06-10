@@ -2,12 +2,15 @@ import os
 import glob
 from typing import Optional, List, Dict, Any, Tuple
 import json
+import yaml
 
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, ConcatDataset, Dataset, random_split
 import pandas as pd
 import numpy as np
+
+from src.data.psd_utils import compute_cutoffs
 
 from src.data.datasets import ActuatorDataset
 
@@ -23,17 +26,21 @@ class ActuatorDataModule(pl.LightningDataModule):
     def __init__(
         self,
         data_base_dir: str,  # Base directory containing subfolders for each inertia group
-        inertia_groups: List[Dict[str, Any]],  # Each dict: {'id': str, 'folder': str, 'inertia': float}
+        inertia_groups: List[Dict[str, Any]],  # Each dict: {'id': str, 'folder': str}. Inertia read from inertia.yaml in each folder
         radius_accel: float, # Radius for tangential acceleration calculation in ActuatorDataset
         filter_order: int,
         filter_cutoff_freq_hz: Optional[float],
         sequence_duration_s: float,
         global_train_ratio: float,
         global_val_ratio: float,
+        use_psd_cutoff: bool = False,
         resampling_frequency_hz: Optional[float] = None,
         synthetic_data_frequency_hz: Optional[float] = None,
         main_gyro_axis: str = 'Gyro_Z',
         main_accel_axis: str = 'Acc_Y',
+        max_torque_nm: Optional[float] = None,
+        sensor_biases: Optional[Dict[str, float]] = None,  # Sensor bias correction values
+        max_commanded_vel: Optional[float] = None,  # Max commanded angular velocity threshold (rad/s)
         # DataLoader params
         batch_size: int = 32,
         num_workers: int = 4,
@@ -86,22 +93,81 @@ class ActuatorDataModule(pl.LightningDataModule):
         with open(file_path, 'w') as f:
             json.dump(stats_dict, f, indent=4)
 
+    def _read_inertia_from_yaml(self, group_path: str, group_id: str) -> float:
+        """Read inertia value from inertia.yaml file in the group folder."""
+        inertia_file_path = os.path.join(group_path, "inertia.yaml")
+        
+        if not os.path.exists(inertia_file_path):
+            raise FileNotFoundError(f"inertia.yaml file not found in {group_path} for group '{group_id}'")
+        
+        try:
+            with open(inertia_file_path, 'r') as f:
+                inertia_data = yaml.safe_load(f)
+            
+            if 'inertia' not in inertia_data:
+                raise ValueError(f"'inertia' key not found in {inertia_file_path} for group '{group_id}'")
+            
+            inertia_value = inertia_data['inertia']
+            if not isinstance(inertia_value, (int, float)) or inertia_value <= 0:
+                raise ValueError(f"Invalid inertia value {inertia_value} in {inertia_file_path} for group '{group_id}'. Must be a positive number.")
+            
+            return float(inertia_value)
+            
+        except yaml.YAMLError as e:
+            raise ValueError(f"Error parsing YAML file {inertia_file_path} for group '{group_id}': {e}")
+        except Exception as e:
+            raise ValueError(f"Error reading inertia from {inertia_file_path} for group '{group_id}': {e}")
+
     def _load_all_datasets_once(self):
         if not self.datasets_by_group:
             print(f"DataModule: Discovering and loading CSV files from {len(self.hparams.inertia_groups)} inertia groups...")
+            if self.hparams.use_psd_cutoff:
+                # Compute PSD-based filter cutoffs once
+                try:
+                    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                    noise_file = os.path.join(project_root, 'data', 'static', 'static_segment_plateau2.csv')
+                    signal_files = []
+                    for group_config in self.hparams.inertia_groups:
+                        group_folder = group_config.get('folder')
+                        group_path = os.path.join(self.hparams.data_base_dir, group_folder)
+                        if os.path.isdir(group_path):
+                            signal_files.extend(glob.glob(os.path.join(group_path, '*.csv')))
+                    columns = ['Encoder_Angle', self.hparams.main_gyro_axis, self.hparams.main_accel_axis]
+                    self.filter_cutoff_freqs = compute_cutoffs(
+                        signal_files,
+                        noise_file,
+                        columns,
+                        fs=self.sampling_frequency,
+                        threshold_db=-6.0
+                    )
+                    print("  Computed PSD-based cutoff frequencies (Hz):")
+                    for col, freq in self.filter_cutoff_freqs.items():
+                        print(f"    {col}: {freq:.2f}")
+                except Exception as e:
+                    print(f"  Warning: PSD cutoff computation failed: {e}")
+                    self.filter_cutoff_freqs = None
+            else:
+                print(f"  Skipping PSD-based cutoff; using manual cutoff {self.hparams.filter_cutoff_freq_hz} Hz")
+                self.filter_cutoff_freqs = None
             total_csv_files = 0
             for group_config in self.hparams.inertia_groups:
                 group_id = group_config.get('id')
                 group_folder = group_config.get('folder')
-                group_inertia = group_config.get('inertia')
-                
                 
                 # Validation
-                if not group_id or not group_folder or group_inertia is None:
-                    raise ValueError(f"Group config missing 'id', 'folder', or 'inertia': {group_config}")
+                if not group_id or not group_folder:
+                    raise ValueError(f"Group config missing 'id' or 'folder': {group_config}")
                 group_path = os.path.join(self.hparams.data_base_dir, group_folder)
                 if not os.path.exists(group_path):
                     print(f"Warning: Group folder does not exist: {group_path}. Skipping group '{group_id}'.")
+                    continue
+                
+                # Read inertia from inertia.yaml file in the group folder
+                try:
+                    group_inertia = self._read_inertia_from_yaml(group_path, group_id)
+                    print(f"  Group '{group_id}': Read inertia={group_inertia} kg*m^2 from inertia.yaml")
+                except Exception as e:
+                    print(f"Error reading inertia for group '{group_id}': {e}. Skipping group.")
                     continue
                 csv_pattern = os.path.join(group_path, "*.csv")
                 csv_files = glob.glob(csv_pattern)
@@ -127,8 +193,12 @@ class ActuatorDataModule(pl.LightningDataModule):
                             main_gyro_axis=self.hparams.main_gyro_axis,
                             main_accel_axis=self.hparams.main_accel_axis,
                             filter_cutoff_freq_hz=self.hparams.filter_cutoff_freq_hz,
+                            filter_cutoff_freqs=self.filter_cutoff_freqs,
                             filter_order=self.hparams.filter_order,
                             is_synthetic_data=is_synthetic,
+                            max_torque_nm=self.hparams.max_torque_nm,
+                            sensor_biases=self.hparams.sensor_biases,
+                            max_commanded_vel=self.hparams.max_commanded_vel,
                         )
                         group_datasets.append(dataset_instance)
                         total_csv_files += 1
@@ -272,11 +342,52 @@ class ActuatorDataModule(pl.LightningDataModule):
         if num_train == 0 or num_val == 0 or num_test == 0:
             raise ValueError(f"Calculated 0 samples for one or more global splits: train={num_train}, val={num_val}, test={num_test}. Check ratios and total samples ({total_samples}).")
 
-        generator = torch.Generator().manual_seed(self.hparams.seed)
-        self.global_train_dataset, self.global_val_dataset, self.global_test_dataset = random_split(
-            combined_dataset, [num_train, num_val, num_test], generator=generator
-        )
-        print(f"  Global split: {len(self.global_train_dataset)} train, {len(self.global_val_dataset)} val, {len(self.global_test_dataset)} test samples.")
+        # The random_split function shuffles data before splitting, which causes data leakage
+        # for time-series data with overlapping sequences.
+        # We replace it with a sequential split to ensure training and test sets are from
+        # different parts of the time-series.
+        print("  Splitting data sequentially to prevent leakage between train/val/test sets.")
+        indices = list(range(total_samples))
+
+        # We must leave a gap between splits to prevent any single time-series point
+        # from appearing in multiple splits due to sequence windowing.
+        # The gap size should be the sequence length minus one.
+        gap_size = self.sequence_length_timesteps - 1
+        print(f"  Using gap of {gap_size} samples between splits to prevent leakage.")
+        
+        train_indices = indices[:num_train]
+        
+        val_start_idx = num_train + gap_size
+        val_end_idx = val_start_idx + num_val
+
+        # Ensure validation set does not go out of bounds
+        if val_end_idx > total_samples:
+            val_end_idx = total_samples
+            print(f"  Warning: Validation split adjusted to fit within available samples.")
+        
+        val_indices = indices[val_start_idx:val_end_idx]
+
+        test_start_idx = val_end_idx + gap_size
+        
+        # Ensure test set does not go out of bounds
+        if test_start_idx >= total_samples:
+             print(f"  Warning: No data left for test set after applying gaps. Test set will be empty.")
+             test_indices = []
+        else:
+            test_indices = indices[test_start_idx:]
+
+        self.global_train_dataset = torch.utils.data.Subset(combined_dataset, train_indices)
+        self.global_val_dataset = torch.utils.data.Subset(combined_dataset, val_indices)
+        self.global_test_dataset = torch.utils.data.Subset(combined_dataset, test_indices)
+        
+        if len(self.global_train_dataset) == 0 or len(self.global_val_dataset) == 0:
+            raise ValueError(
+                f"Calculated 0 samples for train or validation splits after applying gaps. "
+                f"Train: {len(self.global_train_dataset)}, Val: {len(self.global_val_dataset)}. "
+                f"Check ratios and total samples ({total_samples})."
+            )
+
+        print(f"  Global sequential split with gaps: {len(self.global_train_dataset)} train, {len(self.global_val_dataset)} val, {len(self.global_test_dataset)} test samples.")
 
         # Calculate normalization stats based on the global_train_dataset if not already done
         if not self._normalization_stats_computed_for_global_train:

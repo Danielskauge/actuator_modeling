@@ -5,7 +5,7 @@ evaluation_mode: "global" # "global" or "lomo_cv"
 
 defaults:
   - _self_ # Inherit from this file itself
-  - data: default
+  - data: default  # Use synthetic data for training
   - model: default # This will load configs/model/default.yaml (which itself defaults to GRU type)
   - train: default
 
@@ -20,7 +20,7 @@ wandb:
   active: true # set to false to disable wandb
   project: "actuator_modeling_gru_v2" # Your WandB project name
   entity: "" # Your WandB entity (username or team), optional
-  name_suffix: "debug" # Optional suffix for run names
+  name_suffix: "pure_gru_loss_diff_max_vel" # Optional suffix for run names
   group_suffix: "initial_tests" # Optional suffix for wandb groups
   watch_log_freq: 100
   # tags: ["${model.model_type}", "lomo_cv"]

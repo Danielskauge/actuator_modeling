@@ -6,7 +6,7 @@ data_base_dir: "data/synthetic"
 # List of inertia groups for synthetic data. Each group contains multiple CSV files.
 # This configuration is useful for testing and development.
 inertia_groups:
-  - {id: "test_inertia", folder: "0.100kgm2", inertia: 0.1}
+  - {id: "inertia_0_100", folder: "0.100kgm2"}
 
 # Example directory structure for synthetic data:
 # data/synthetic_raw/
@@ -23,22 +23,25 @@ inertia_groups:
 #       └── ...
 
 # --- DataModule Parameters ---
-batch_size: 32
-num_workers: 4
+batch_size: 32  # Back to reasonable batch size
+num_workers: 4   # Re-enable multiprocessing
 seed: ${seed}
 
 # --- Global Split Ratios ---
 global_train_ratio: 0.7
 global_val_ratio: 0.15
 
-synthetic_data_frequency_hz: 100.0
+resampling_frequency_hz: 240.0  # Match Isaac Sim frequency
 
 # --- System Geometry ---
 radius_accel: 0.2 # meters
 
 # --- Filtering for tau_measured (applied in ActuatorDataset) ---
-filter_cutoff_freq_hz: null # Hz, set to null or remove to disable. Adjust as needed.
+filter_cutoff_freq_hz: 30.0 # Hz
 filter_order: 4 # Order of Butterworth filter, default is 4.
 
 # --- Sequence Duration ---
-sequence_duration_s: 0.5 # Duration in seconds for each sequence; must be set in config
+sequence_duration_s: 0.5 # Back to 0.5 seconds for proper training
+
+# Maximum allowed torque [Nm] for servo + spring combined  
+max_torque_nm: 3.6 # Match real system limits from default.yaml

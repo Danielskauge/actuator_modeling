@@ -156,18 +156,26 @@ class ActuatorModel(pl.LightningModule):
 
         positive_vel_mask = joint_vel > 0
         if torch.any(positive_vel_mask):
+            # Clip PD torque for positive velocities with tensor bounds
+            pos_vals = pd_joint_torque[positive_vel_mask]
+            pos_max = max_torque_in_vel_direction[positive_vel_mask]
+            pos_min = torch.full_like(pos_max, -stall_torque)
             saturated_torque[positive_vel_mask] = torch.clip(
-                pd_joint_torque[positive_vel_mask],
-                min=-stall_torque,
-                max=max_torque_in_vel_direction[positive_vel_mask]
+                pos_vals,
+                min=pos_min,
+                max=pos_max
             )
 
         negative_vel_mask = joint_vel < 0
         if torch.any(negative_vel_mask):
+            # Clip PD torque for negative velocities with tensor bounds
+            neg_vals = pd_joint_torque[negative_vel_mask]
+            neg_min = -max_torque_in_vel_direction[negative_vel_mask]
+            neg_max = torch.full_like(neg_min, stall_torque)
             saturated_torque[negative_vel_mask] = torch.clip(
-                pd_joint_torque[negative_vel_mask],
-                min=-max_torque_in_vel_direction[negative_vel_mask],
-                max=stall_torque
+                neg_vals,
+                min=neg_min,
+                max=neg_max
             )
         
         zero_vel_mask = joint_vel == 0
@@ -180,7 +188,7 @@ class ActuatorModel(pl.LightningModule):
             
         return saturated_torque
 
-    def _calculate_tau_phys(self, x_sequence: torch.Tensor) -> torch.Tensor:
+    def _calculate_tau_phys(self, x_sequence: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Calculates physics-based torque (tau_phys) using the input sequence x_sequence.
         x_sequence shape: [batch_size, sequence_length, features_per_step]
@@ -190,31 +198,40 @@ class ActuatorModel(pl.LightningModule):
         - 1: target_angle_rad
         - 2: current_ang_vel_rad_s
         For the kd_phys term, target angular velocity is assumed to be 0.
+        
+        Returns:
+            tau_phys: Total physics torque [batch, seq_len, 1]
+            tau_spring: Spring component [batch, seq_len, 1]
+            tau_pd: PD component (after TSC clipping) [batch, seq_len, 1]
         """
-        if not self.use_residual: # Should not be called if not in residual mode
-            return torch.zeros(x_sequence.size(0), 1, device=x_sequence.device)
+        # Many-to-many: compute physics torque per timestep
+        batch_size, seq_len, _ = x_sequence.shape
+        # If not using residual, return zeros for all timesteps
+        if not self.use_residual:
+            zeros = x_sequence.new_zeros((batch_size, seq_len, 1))
+            return zeros, zeros, zeros
 
-        # Features from the LATEST time step in the sequence (k)
-        features_current_step = x_sequence[:, -1, :] 
-        current_angle_k = features_current_step[:, 0]
-        target_angle_k = features_current_step[:, 1]
-        current_ang_vel_k = features_current_step[:, 2]
+        # Extract features per timestep: [batch, seq_len]
+        current_angle = x_sequence[..., 0]
+        target_angle = x_sequence[..., 1]
+        current_ang_vel = x_sequence[..., 2]
 
-        error_pos_k = target_angle_k - current_angle_k
+        # Position and velocity errors per timestep
+        error_pos = target_angle - current_angle
+        error_vel = -current_ang_vel  # target angular velocity is 0
+
+        # Spring and PD components per timestep
+        tau_spring = -self.k_spring * (current_angle - self.theta0)
+        tau_pd = self.kp_phys * error_pos + self.kd_phys * error_vel
+
+        # Apply torque-speed curve clipping elementwise
+        saturated_tau_pd = self._apply_tsc_to_pd_component(tau_pd, current_ang_vel)
+
+        # Total physics torque per timestep: shape [batch, seq_len]
+        tau_phys = tau_spring + saturated_tau_pd
         
-        # Target angular velocity for the physics model's kd_phys term is assumed to be 0.
-        target_ang_vel_for_physics_term = torch.zeros_like(current_ang_vel_k)
-        error_vel_k = target_ang_vel_for_physics_term - current_ang_vel_k # Effectively -current_ang_vel_k
-        
-        tau_spring_comp = self.k_spring * (current_angle_k - self.theta0)
-        # Calculate PD torque component separately
-        tau_pd_only = self.kp_phys * error_pos_k + self.kd_phys * error_vel_k
-        
-        # Apply TSC to the PD component if configured for training
-        saturated_tau_pd_only = self._apply_tsc_to_pd_component(tau_pd_only, current_ang_vel_k)
-        
-        tau_phys = tau_spring_comp + saturated_tau_pd_only
-        return tau_phys.unsqueeze(1) # Shape [batch_size, 1]
+        # Add feature dimension for consistency: [batch, seq_len, 1]
+        return tau_phys.unsqueeze(-1), tau_spring.unsqueeze(-1), saturated_tau_pd.unsqueeze(-1)
 
     def step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int, stage: str) -> Dict[str, torch.Tensor]:
         """
@@ -254,11 +271,23 @@ class ActuatorModel(pl.LightningModule):
         y_pred_final_normalized_for_metrics = y_hat_model_output_normalized
         
         tau_phys_raw_for_logging = None # For logging original scale tau_phys
+        tau_spring_raw_for_logging = None # For logging original scale tau_spring
+        tau_pd_raw_for_logging = None # For logging original scale tau_pd
+        residual_component_denormalized = None # For residual mode analysis
 
         if self.use_residual:
             # Calculate tau_phys using RAW (unnormalized) x, as physics model expects physical units
-            tau_phys_raw = self._calculate_tau_phys(x).squeeze(-1) # Shape [batch], physical units
+            tau_phys_raw, tau_spring_raw, tau_pd_raw = self._calculate_tau_phys(x)
+            tau_phys_raw = tau_phys_raw.squeeze(-1) # Shape [batch, seq_len], physical units
+            tau_spring_raw = tau_spring_raw.squeeze(-1) # Shape [batch, seq_len], physical units
+            tau_pd_raw = tau_pd_raw.squeeze(-1) # Shape [batch, seq_len], physical units
+            
             tau_phys_raw_for_logging = tau_phys_raw # Save for logging
+            tau_spring_raw_for_logging = tau_spring_raw # Save for logging
+            tau_pd_raw_for_logging = tau_pd_raw # Save for logging
+            
+            # Denormalize the residual component (model's direct output)
+            residual_component_denormalized = y_hat_model_output_normalized * (std_y + 1e-7) + mean_y
             
             # Normalize tau_phys_raw to the same scale as the target
             tau_phys_normalized = (tau_phys_raw - mean_y) / (std_y + 1e-7)
@@ -293,7 +322,22 @@ class ActuatorModel(pl.LightningModule):
             # Log the mean absolute value of the ORIGINAL, physical-scale tau_phys
             self.log(f"{stage}_tau_phys_mean_abs", torch.mean(torch.abs(tau_phys_raw_for_logging)), on_epoch=True, on_step=False, sync_dist=True)
 
-        return {"loss": loss, "preds": y_pred_final_denormalized_for_metrics, "targets": y_measured_torque_raw, "timestamps": timestamps}
+        # Prepare return dictionary with components for residual mode analysis
+        return_dict = {
+            "loss": loss, 
+            "preds": y_pred_final_denormalized_for_metrics, 
+            "targets": y_measured_torque_raw, 
+            "timestamps": timestamps
+        }
+        
+        # Add analytical and residual components if in residual mode
+        if self.use_residual and tau_phys_raw_for_logging is not None and residual_component_denormalized is not None:
+            return_dict["analytical_torque"] = tau_phys_raw_for_logging
+            return_dict["spring_component"] = tau_spring_raw_for_logging
+            return_dict["pd_component"] = tau_pd_raw_for_logging
+            return_dict["residual_component"] = residual_component_denormalized
+            
+        return return_dict
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> torch.Tensor:
         # Timestamps are not strictly needed for loss calculation in training_step, but step() expects them
@@ -305,12 +349,32 @@ class ActuatorModel(pl.LightningModule):
     
     def test_step(self, batch: Tuple[torch.Tensor, torch.Tensor, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         step_output = self.step(batch, batch_idx, "test")
-        # Store predictions, targets, and now timestamps for TestPredictionPlotter
-        self.test_step_outputs.append({
+        
+        # Get sequence length to compute positions within sequences
+        batch_size, seq_len = step_output['preds'].shape
+        
+        # Create position indices: for each sample in batch, positions go from 0 to seq_len-1
+        positions = torch.arange(seq_len, device=step_output['preds'].device).unsqueeze(0).repeat(batch_size, 1)
+        
+        # Store predictions, targets, timestamps, and sequence positions for TestPredictionPlotter
+        test_step_data = {
             'preds': step_output['preds'].detach(), 
             'targets': step_output['targets'].detach(),
-            'timestamps': step_output['timestamps'].detach() # Timestamps are already 1D
-        })
+            'timestamps': step_output['timestamps'].detach(), # Timestamps are already 1D
+            'positions': positions.detach()  # Position within sequence for each prediction
+        }
+        
+        # Store analytical and residual components if available (residual mode)
+        if 'analytical_torque' in step_output and 'residual_component' in step_output:
+            test_step_data['analytical_torque'] = step_output['analytical_torque'].detach()
+            test_step_data['residual_component'] = step_output['residual_component'].detach()
+            
+            # Store individual spring and PD components if available
+            if 'spring_component' in step_output and 'pd_component' in step_output:
+                test_step_data['spring_component'] = step_output['spring_component'].detach()
+                test_step_data['pd_component'] = step_output['pd_component'].detach()
+            
+        self.test_step_outputs.append(test_step_data)
         return step_output
     
     def on_train_epoch_end(self):
@@ -328,11 +392,30 @@ class ActuatorModel(pl.LightningModule):
                 self.all_test_preds = torch.cat([out['preds'] for out in self.test_step_outputs])
                 self.all_test_targets = torch.cat([out['targets'] for out in self.test_step_outputs])
                 self.all_test_timestamps = torch.cat([out.get('timestamps') for out in self.test_step_outputs if out.get('timestamps') is not None])
+                self.all_test_positions = torch.cat([out.get('positions') for out in self.test_step_outputs if out.get('positions') is not None])
+                
+                # Concatenate analytical and residual components if available (residual mode)
+                if any('analytical_torque' in out for out in self.test_step_outputs):
+                    self.all_test_analytical_torque = torch.cat([out['analytical_torque'] for out in self.test_step_outputs if 'analytical_torque' in out])
+                    self.all_test_residual_component = torch.cat([out['residual_component'] for out in self.test_step_outputs if 'residual_component' in out])
+                    
+                    # Concatenate individual spring and PD components if available
+                    if any('spring_component' in out for out in self.test_step_outputs):
+                        self.all_test_spring_component = torch.cat([out['spring_component'] for out in self.test_step_outputs if 'spring_component' in out])
+                        self.all_test_pd_component = torch.cat([out['pd_component'] for out in self.test_step_outputs if 'pd_component' in out])
+                    
             except RuntimeError as e:
                 print(f"Warning: Could not concatenate test outputs (possibly empty): {e}")
                 self.all_test_preds = torch.empty(0) # Ensure attributes exist even if empty
                 self.all_test_targets = torch.empty(0)
                 self.all_test_timestamps = torch.empty(0)
+                self.all_test_positions = torch.empty(0)
+                # Initialize residual mode attributes to empty if concatenation fails
+                if hasattr(self, 'use_residual') and self.use_residual:
+                    self.all_test_analytical_torque = torch.empty(0)
+                    self.all_test_residual_component = torch.empty(0)
+                    self.all_test_spring_component = torch.empty(0)
+                    self.all_test_pd_component = torch.empty(0)
             self.test_step_outputs.clear() # Clear for next test run (if any)
                 
     def _log_epoch_metrics(self, current_metrics_dict: Dict[str, Any], stage: str):
@@ -355,35 +438,46 @@ class ActuatorModel(pl.LightningModule):
         
         # LR Scheduler: Linear warmup then cosine decay
         def lr_lambda_fn(current_step: int):
-            # Ensure trainer and its attributes are available
-            # Access num_training_batches via self.trainer.num_training_batches (PL >=1.7)
-            # or self.trainer.estimated_stepping_batches / self.trainer.max_epochs (older versions or if accumulate_grad_batches > 1)
-            # For simplicity, assume num_training_batches is available on trainer. Guard against it. 
-            if not hasattr(self.trainer, 'num_training_batches') or self.trainer.num_training_batches == 0 or \
-               not hasattr(self.trainer, 'max_epochs') or self.trainer.max_epochs == 0:
-                print("Warning: Trainer attributes for LR scheduler (num_training_batches/max_epochs) not fully available or zero. Using LR=1.0 for this step. This might happen during sanity checks.")
-                return 1.0 
+            # Handle the case where trainer attributes aren't ready yet (during initialization, sanity checks, etc.)
+            # This prevents the "inf" warnings
+            if (not hasattr(self.trainer, 'num_training_batches') or 
+                not hasattr(self.trainer, 'max_epochs') or
+                self.trainer.num_training_batches is None or 
+                self.trainer.max_epochs is None or
+                self.trainer.num_training_batches == 0 or 
+                self.trainer.max_epochs == 0 or
+                not isinstance(self.trainer.num_training_batches, (int, float)) or
+                not isinstance(self.trainer.max_epochs, (int, float)) or
+                self.trainer.num_training_batches == float('inf') or
+                self.trainer.max_epochs == float('inf')):
+                # During initialization, sanity checks, etc., just return 1.0 (no LR modification)
+                return 1.0
                 
             num_warmup_steps = self.hparams.warmup_epochs * self.trainer.num_training_batches
-            # Ensure num_warmup_steps is at least 0, and 1 if warmup_epochs > 0 but num_training_batches is 0 (e.g. during sanity check)
-            if self.hparams.warmup_epochs > 0 and num_warmup_steps == 0:
-                num_warmup_steps = 1 # Avoid division by zero if warmup_epochs > 0
-            
             num_training_steps = self.trainer.max_epochs * self.trainer.num_training_batches
-            if num_training_steps == 0: # If total steps are somehow zero, avoid further errors
-                 print(f"Warning: Total training steps calculated as zero. LR will be constant at 1.0.")
-                 return 1.0
-
-            # Adjusted warning condition and logic
-            if num_training_steps <= num_warmup_steps:
+            
+            # Additional safety checks
+            if (not isinstance(num_warmup_steps, (int, float)) or 
+                not isinstance(num_training_steps, (int, float)) or
+                num_warmup_steps == float('inf') or 
+                num_training_steps == float('inf') or
+                num_training_steps <= 0):
+                return 1.0
+            
+            # Ensure num_warmup_steps is at least 1 if warmup_epochs > 0
+            if self.hparams.warmup_epochs > 0 and num_warmup_steps == 0:
+                num_warmup_steps = 1
+            
+            # Warning only if we have valid finite values but they're problematic
+            if num_training_steps <= num_warmup_steps and num_training_steps > 0:
                 print(f"Info: Total training steps ({num_training_steps}) <= warmup steps ({num_warmup_steps}). Effective LR behavior will be linear warmup to peak, then constant at peak LR.")
                 # Linear warmup, then constant
                 return float(current_step) / float(max(1, num_warmup_steps)) if current_step < num_warmup_steps else 1.0
 
             if current_step < num_warmup_steps:
-                return float(current_step) / float(max(1, num_warmup_steps)) # max(1,..) to avoid division by zero
+                return float(current_step) / float(max(1, num_warmup_steps))
             
-            # Ensure denominator for progress is at least 1
+            # Cosine annealing for the remaining steps
             num_decay_steps = num_training_steps - num_warmup_steps
             progress = float(current_step - num_warmup_steps) / float(max(1, num_decay_steps))
             return max(0.0, 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi))))

@@ -11,7 +11,7 @@ G_ACCEL = 9.81  # m/s^2
 class SyntheticDataConfig:
     # File output
     output_dir: str = "data/synthetic" # Subdirectory for generated CSVs
-    num_different_inertias: int = 1
+    num_different_inertias: int = 1  # Just one inertia group
     base_filename: str = "synthetic_actuator_data_mass"
 
     # System properties (can be varied per file)
@@ -21,30 +21,49 @@ class SyntheticDataConfig:
     # PD Controller for generating behavior (these are the *true* underlying parameters)
     kp_true: float = 10.0
     kd_true: float = 1.0
-    stall_torque_nm: float = 10
+    stall_torque_nm: float = 3.6  # Match real system limits
 
     # Parallel Spring for generating behavior (true underlying parameters)
     k_spring_true: float = 0.0 # Nm/rad
     theta0_spring_true: float = 0.0 # Equilibrium angle in radians
+    # Advanced motor characteristics
+    include_spring: bool = False  # Whether to include spring torque
+    include_torque_speed_curve: bool = False  # Whether to include torque-speed curve
+    no_load_speed_hz: float = 100.0  # No-load speed for torque-speed curve [Hz]
 
     # Simulation settings
-    dt: float = 0.01  # Simulation time step [s] (100 Hz)
-    t_sim_per_file: float = 50.0  # Total simulation time per file [s]
-    noise_torque_std: float = 0.0 # Standard deviation of noise added to PD torque command [Nm]
+    dt: float = 1/240.0  # Simulation time step [s] (240 Hz to match Isaac Sim)
+    t_sim_per_file: float = 60.0  # Back to 60 seconds per file
+    noise_torque_std: float = 0.01 # Standard deviation of noise added to PD torque command [Nm]
     noise_gyro_std_rad_s: float = 0.01 # Noise on GyroZ readings (rad/s)
-    noise_accel_std_m_s2: float = 0.0 # Noise on Acc_Y readings (m/s^2)
-    noise_encoder_std_rad: float = 0.01 # Noise on Encoder_Angle readings (rad)
+    noise_accel_std_m_s2: float = 0.01 # Noise on Acc_Y readings (m/s^2)
+    noise_encoder_std_rad: float = 0.005 # Noise o n Encoder_Angle readings (rad)
 
-    # Target Trajectory parameters (can be varied per file)
-    base_amp_target_rad: float = np.pi / 4  # Amplitude of target angle [rad]
-    base_freq_target_hz: float = 0.5     # Frequency of target angle [Hz]
+    # Target Trajectory parameters (chirp characteristics will be varied per file)
+    base_amp_target_rad: float = np.pi / 6  # Base amplitude of target angle [rad]
+    base_freq_target_hz: float = 1.0     # Base frequency of target angle [Hz]
 
 # Helper for target trajectory
-def get_target_trajectory(t: float, amp: float, freq: float) -> tuple[float, float, float]:
-    omega = 2 * np.pi * freq
-    target_angle = amp * np.sin(omega * t)
-    target_ang_vel = amp * omega * np.cos(omega * t)
-    target_ang_accel = -amp * omega**2 * np.sin(omega * t)
+def get_target_trajectory(t: float, amp_base: float, freq_base: float, t_total: float) -> tuple[float, float, float]:
+    """Generate chirp signal with continuously changing frequency and amplitude."""
+    # Frequency chirp: linearly increase from freq_base/2 to freq_base*2 over time
+    freq_min = freq_base * 0.3
+    freq_max = freq_base * 2.0
+    freq_rate = (freq_max - freq_min) / t_total
+    instantaneous_freq = freq_min + freq_rate * t
+    
+    # Amplitude modulation: vary between 0.5*amp_base and 1.5*amp_base with slower cycle
+    amp_mod_freq = 0.1  # Hz, slow amplitude modulation
+    amp_variation = 0.5 * amp_base * np.sin(2 * np.pi * amp_mod_freq * t)
+    instantaneous_amp = amp_base + amp_variation
+    
+    # Phase accumulation for chirp
+    phase = 2 * np.pi * (freq_min * t + 0.5 * freq_rate * t**2)
+    
+    target_angle = instantaneous_amp * np.sin(phase)
+    target_ang_vel = instantaneous_amp * instantaneous_freq * 2 * np.pi * np.cos(phase)
+    target_ang_accel = -instantaneous_amp * (instantaneous_freq * 2 * np.pi)**2 * np.sin(phase)
+    
     return target_angle, target_ang_vel, target_ang_accel
 
 def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val: float, amp_traj: float, freq_traj: float) -> str:
@@ -58,7 +77,7 @@ def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val:
     log = []
 
     for t_current in time_vec:
-        target_angle_rad, target_ang_vel_rad_s, _ = get_target_trajectory(t_current, amp_traj, freq_traj)
+        target_angle_rad, target_ang_vel_rad_s, _ = get_target_trajectory(t_current, amp_traj, freq_traj, config.t_sim_per_file)
 
         error = target_angle_rad - current_angle_rad_actual
         error_dot = target_ang_vel_rad_s - current_ang_vel_rad_s_actual
@@ -66,14 +85,22 @@ def generate_single_csv(config: SyntheticDataConfig, file_idx: int, inertia_val:
         tau_pd_command_component = config.kp_true * error + config.kd_true * error_dot
         
         # True spring force acting on the system
-        true_spring_force = config.k_spring_true * (current_angle_rad_actual - config.theta0_spring_true)
+        if config.include_spring:
+            true_spring_force = config.k_spring_true * (current_angle_rad_actual - config.theta0_spring_true)
+        else:
+            true_spring_force = 0.0
         
         # Add noise to the PD commanded torque (simulating noise in the motor command itself)
         torque_noise_sample = np.random.normal(0, config.noise_torque_std)
         noisy_pd_command_component = tau_pd_command_component + torque_noise_sample
 
         # Apply stall torque saturation
-        saturated_pd_command_component = np.clip(noisy_pd_command_component, -config.stall_torque_nm, config.stall_torque_nm)
+        if config.include_torque_speed_curve:
+            no_load_speed_rad_s = config.no_load_speed_hz * 2 * math.pi
+            max_torque = config.stall_torque_nm * max(0.0, 1 - abs(current_ang_vel_rad_s_actual) / no_load_speed_rad_s)
+        else:
+            max_torque = config.stall_torque_nm
+        saturated_pd_command_component = np.clip(noisy_pd_command_component, -max_torque, max_torque)
         
         # Net torque causing acceleration of the inertia
         # The motor attempts to apply saturated_pd_command_component. The spring resists this.
@@ -134,27 +161,35 @@ def main():
     print(f"Generating synthetic data. Output directory: {cfg.output_dir}")
 
     generated_files_metadata = [] # Store dicts with path, inertia, and folder name
+    
+    # Generate multiple files per inertia value for better training data variety
+    files_per_inertia = 1  # Just one file per inertia
+    base_inertia = cfg.base_inertia
+    
     for i in range(cfg.num_different_inertias):
-        # Vary inertia for each file group.
-        # The script currently generates distinct files each with potentially different inertias.
-        # For the LOMO CV structure, each of these files will effectively become its own "group"
-        # unless multiple files are generated *for the same inertia* into the same folder.
-        # The current logic varies inertia per file, so each file gets its own inertia folder.
-        current_inertia = cfg.base_inertia * (1 + i * 0.5) # 0.01, 0.015, 0.02 for num_files=3
-        current_amp = cfg.base_amp_target_rad * (1 - i * 0.1)
-        current_freq = cfg.base_freq_target_hz * (1 + i * 0.2)
-
-        file_path = generate_single_csv(cfg, i, current_inertia, current_amp, current_freq)
-        
+        current_inertia = base_inertia * (1 + i * 0.2)  # 0.1, 0.12, 0.14 kg*m^2
         inertia_folder_name = f"{current_inertia:.3f}kgm2"
-        generated_files_metadata.append({
-            "csv_file_path": file_path, 
-            "inertia": current_inertia,
-            "folder": inertia_folder_name 
-        })
+        
+        for file_idx in range(files_per_inertia):
+            # Vary chirp characteristics for each file
+            amp_variation = 1.0 + (file_idx - 2) * 0.2  # 0.6, 0.8, 1.0, 1.2, 1.4
+            freq_variation = 1.0 + (file_idx - 2) * 0.3  # 0.4, 0.7, 1.0, 1.3, 1.6
+            
+            current_amp = cfg.base_amp_target_rad * amp_variation
+            current_freq = cfg.base_freq_target_hz * freq_variation
+            
+            global_file_idx = i * files_per_inertia + file_idx
+            
+            file_path = generate_single_csv(cfg, global_file_idx, current_inertia, current_amp, current_freq)
+            
+            generated_files_metadata.append({
+                "csv_file_path": file_path, 
+                "inertia": current_inertia,
+                "folder": inertia_folder_name 
+            })
     
     print("\nSynthetic data generation complete.")
-    print("Generated file configs (for data.dataset_configs in Hydra):")
+    print("Generated file configs (for data.inertia_groups in Hydra):")
     # Create a unique list of group configs for Hydra
     # This assumes each generated file (with its unique inertia) forms a group
     hydra_group_configs = []
@@ -163,10 +198,8 @@ def main():
         if item["folder"] not in seen_folders:
             # The relative path for csv_file_path in Hydra config is usually just the folder.
             # The datamodule will then look for all CSVs in that folder.
-            # However, the current setup is one file per folder.
-            # For Hydra, we list the "groups" (folders)
             hydra_group_configs.append(
-                f"  - {{id: \"inertia_{item['folder'].replace('kgm2','').replace('.','_')}\", folder: \"{item['folder']}\", inertia: {item['inertia']:.4f}}}"
+                f"  - {{id: \"inertia_{item['folder'].replace('kgm2','').replace('.','_')}\", folder: \"{item['folder']}\"}}"
             )
             seen_folders.add(item['folder'])
             

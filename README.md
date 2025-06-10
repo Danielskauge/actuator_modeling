@@ -26,6 +26,7 @@ This project focuses on developing and evaluating models to predict joint torque
     *   [Stateful GRU for Time-Series Modeling](#stateful-gru-for-time-series-modeling)
     *   [Two-Stage Evaluation Strategy](#two-stage-evaluation-strategy)
     *   [Data Resampling Strategy](#data-resampling-strategy)
+    *   [Data-Driven Filtering Strategy](#data-driven-filtering-strategy)
     *   [Feature Engineering in `ActuatorDataset`](#feature-engineering-in-actuatordataset)
     *   [Residual Modeling in `ActuatorModel`](#residual-modeling-in-actuatormodel)
     *   [Normalization Strategy](#normalization-strategy)
@@ -276,6 +277,15 @@ After training, the best model checkpoint can be automatically exported to a Tor
     *   The `ActuatorDataModule` requires a `target_sampling_frequency_hz` parameter in its configuration (e.g., `data.target_sampling_frequency_hz=100.0`).
     *   Each `ActuatorDataset` instance receives this target frequency and resamples its DataFrame using pandas' `resample()` method with **linear interpolation** before any further feature engineering or sequence creation.
     *   This results in all datasets having the same effective sampling rate, and thus, for a given `sequence_duration_s`, all generated sequences will have the same number of timesteps.
+    *   **Data-Driven Filtering Strategy**:
+        *   Rather than manually choosing a single cutoff, we adaptively determine per-channel low-pass cutoffs based on actual signal and noise spectra.
+        *   Estimate the power spectral density (PSD) of each measured channel across all dynamic runs: $P_
+          signal(f)$, and of a static noise segment (sensor held fixed): $P_{noise}(f)$, via Welch's method.
+        *   Compute the spectral SNR: $	ext{SNR}(f)=P_{signal}(f)/P_{noise}(f)$, or in decibels:
+          $$	ext{SNR}_{dB}(f)=10\,\log_{10}\frac{P_{signal}(f)}{P_{noise}(f)}.$$
+        *   Define the cutoff frequency $f_c$ as the highest $f$ where $	ext{SNR}_{dB}(f)\ge\text{SNR}_{dB}^{max}-\Delta$, with $	ext{SNR}_{dB}^{max}=\max_f\text{SNR}_{dB}(f)$ and a chosen drop $\Delta$ (e.g. 6 dB).
+        *   If no frequency meets this relative threshold, fall back to $f_{peak}=\arg\max_f\text{SNR}_{dB}(f)$.
+        *   This approach yields channel-specific cutoffs, automatically balancing noise attenuation with preservation of relevant signal dynamics.
 *   **Feature Engineering in `ActuatorDataset`**: Centralized calculation of 3 core input features (`current_angle_rad`, `target_angle_rad`, `current_ang_vel_rad_s`) in a **defined order** as specified by `ActuatorDataset.FEATURE_NAMES`. This order is critical as it's implicitly used for calculating and applying normalization statistics and by the input layer of models, including the deployed `CombinedGRUAndPDActuator`. Raw, unnormalized data is passed to `ActuatorDataModule`.
 
 *   **Residual Modeling in `ActuatorModel`**:
