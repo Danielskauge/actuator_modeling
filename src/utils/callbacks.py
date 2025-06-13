@@ -128,6 +128,35 @@ class TestPredictionPlotter(Callback):
       (most historical context) for each unique timestep
     """
 
+    def __init__(self, output_dir: Optional[str] = None):
+        """Optionally specify a folder where all generated plots will be written as PNGs.
+        If *output_dir* is None we will attempt to infer it at runtime from the trainer.logger
+        (``save_dir`` for ``TensorBoardLogger`` or ``WandbLogger``).  A ``plots`` sub-folder is
+        created automatically.
+        """
+        super().__init__()
+        self.output_dir = output_dir
+
+    def _get_plot_dir(self, trainer: pl.Trainer) -> str:
+        # Resolve folder in the following priority: constructor arg > logger.save_dir > CWD
+        base_dir = self.output_dir
+        if base_dir is None:
+            base_dir = getattr(trainer.logger, "save_dir", None) if trainer.logger else None
+        if base_dir is None:
+            base_dir = os.getcwd()
+        plot_dir = os.path.join(base_dir, "plots")
+        os.makedirs(plot_dir, exist_ok=True)
+        return plot_dir
+
+    def _sanitize(self, name: str) -> str:
+        return (
+            name.lower()
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("(", "")
+            .replace(")", "")
+        )
+
     def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         print("\n[Callback] Generating test set prediction plots...")
 
@@ -172,6 +201,28 @@ class TestPredictionPlotter(Callback):
                 len(preds_np) == len(targets_np) == len(timestamps_np) == len(positions_np)):
             print(f"[Callback] Dimension mismatch after squeeze or not 1D: preds {preds_np.shape}, targets {targets_np.shape}, timestamps {timestamps_np.shape}, positions {positions_np.shape}. Skipping plots.")
             return
+
+        # -------------------------------------------------------------------------
+        # Determine fold / inertia information (only available for LOMO CV runs)
+        # -------------------------------------------------------------------------
+        fold_info_str = ""
+        try:
+            dm = trainer.datamodule  # type: ignore[attr-defined]
+            if getattr(dm, "_current_mode", None) == "lomo_fold":
+                fold_idx = getattr(dm, "current_fold_index", None)
+                held_out_group = getattr(dm, "held_out_group_id", None)
+                inertia_val = None
+                if held_out_group and hasattr(dm, "datasets_by_group") and held_out_group in dm.datasets_by_group:
+                    ds_list_tmp = dm.datasets_by_group[held_out_group]
+                    if ds_list_tmp:
+                        inertia_val = getattr(ds_list_tmp[0], "inertia", None)
+                if fold_idx is not None:
+                    fold_info_str = f" (Fold {fold_idx + 1}"
+                    if inertia_val is not None:
+                        fold_info_str += f", Inertia {inertia_val:.4g} kg*m^2"
+                    fold_info_str += ")"
+        except Exception as e:
+            print(f"[Callback] Could not determine fold info for plot titles: {e}")
 
         # --- Create DataFrame with all predictions and a deduplicated version ---
         plot_df_all = pd.DataFrame({
@@ -239,7 +290,8 @@ class TestPredictionPlotter(Callback):
         ax_scatter.plot(lims, lims, 'r--', alpha=0.75, zorder=0, label='Ideal (y=x)')
         ax_scatter.set_xlabel("Actual Torque", fontsize=14)
         ax_scatter.set_ylabel("Predicted Torque", fontsize=14)
-        ax_scatter.set_title("Test Set: Predicted vs. Actual Torque", fontsize=16)
+        scatter_title = "Test Set: Predicted vs. Actual Torque" + fold_info_str
+        ax_scatter.set_title(scatter_title, fontsize=16)
         ax_scatter.legend(fontsize=12, loc='upper left')
         ax_scatter.grid(True)
         ax_scatter.set_aspect('equal', adjustable='box')
@@ -284,12 +336,12 @@ class TestPredictionPlotter(Callback):
                 slice_figs.append(fig_slice)
                 slice_names.append(f"Test Set Time Series Slice ({slice_name})")
 
-        # --- 2c. Short 5-Second Time Slice Plot - Use deduplicated ---
-        short_window_duration = 5.0  # seconds
-        start_ts = plot_df_unique['timestamp'].min()
-        end_ts = start_ts + short_window_duration
+        # --- 2c. Short 3-Second Time Slice Plot (LAST 3s) ---
+        short_window_duration = 3.0  # seconds
+        end_ts = plot_df_unique['timestamp'].max()
+        start_ts = max(end_ts - short_window_duration, plot_df_unique['timestamp'].min())
         
-        # Filter the deduplicated dataframe for the 5-second window
+        # Filter the deduplicated dataframe for the 3-second window
         short_mask = (plot_df_unique['timestamp'] >= start_ts) & (plot_df_unique['timestamp'] <= end_ts)
         short_df = plot_df_unique[short_mask]
         
@@ -297,18 +349,19 @@ class TestPredictionPlotter(Callback):
         short_names = []
         
         if len(short_df) > 0:
-            fig_short, ax_short = plt.subplots(figsize=slice_figsize, dpi=dpi)
+            # Larger, high-resolution figure for thesis quality
+            fig_short, ax_short = plt.subplots(figsize=(20, 6), dpi=300)
             ax_short.plot(short_df['timestamp'], short_df['actual_torque'], 
                          label='Actual Torque', linewidth=linewidth, color='blue')
             ax_short.plot(short_df['timestamp'], short_df['predicted_torque'], 
                          label='Predicted Torque', alpha=0.8, linewidth=linewidth, color='orange')
             ax_short.set_xlabel("Time (seconds since epoch)", fontsize=14)
             ax_short.set_ylabel("Torque", fontsize=14)
-            ax_short.set_title(f"Test Set: First {short_window_duration:.0f}s - Torque Prediction", fontsize=16)
+            ax_short.set_title(f"Test Set: Last {short_window_duration:.0f}s - Torque Prediction", fontsize=16)
             ax_short.legend(fontsize=12, loc='upper right')
             ax_short.grid(True)
             short_figs.append(fig_short)
-            short_names.append(f"Test Set First {short_window_duration:.0f}s")
+            short_names.append(f"Test Set Last {short_window_duration:.0f}s")
 
         # --- 3. Residuals vs. Time Plot - Use deduplicated for time series clarity ---
         residuals_unique = plot_df_unique['actual_torque'] - plot_df_unique['predicted_torque']
@@ -330,276 +383,41 @@ class TestPredictionPlotter(Callback):
         ax_hist.set_title(f"Histogram of Prediction Errors (n={len(residuals_all):,} predictions)", fontsize=16)
         ax_hist.grid(True)
 
-        # Store figures to log
-        log_dict = {
-            "Test Set Scatter Plot": wandb.Image(fig_scatter),
-            "Test Set Time Series Plot": wandb.Image(fig_ts),
-            "Test Set Residuals vs Time": wandb.Image(fig_resid),
-            "Test Set Residuals Histogram": wandb.Image(fig_hist)
-        }
+        # Store figures for WandB logging **and** for local saving
+        log_dict: dict[str, wandb.Image] = {}
+        local_figs: list[tuple[str, plt.Figure]] = []
+
+        def _add_fig(key: str, fig: plt.Figure):
+            log_dict[key] = wandb.Image(fig)
+            local_figs.append((key, fig))
+
+        _add_fig(f"Test Set Scatter Plot{fold_info_str}", fig_scatter)
+        _add_fig("Test Set Time Series Plot", fig_ts)
+        _add_fig("Test Set Residuals vs Time", fig_resid)
+        _add_fig("Test Set Residuals Histogram", fig_hist)
 
         # Add slice plots
         for slice_fig, slice_name in zip(slice_figs, slice_names):
-            log_dict[slice_name] = wandb.Image(slice_fig)
+            _add_fig(slice_name, slice_fig)
 
-        # Add short 5s plot
+        # Add last-3s plot
         for short_fig, short_name in zip(short_figs, short_names):
-            log_dict[short_name] = wandb.Image(short_fig)
+            _add_fig(short_name, short_fig)
 
-        # --- RESIDUAL MODE ANALYSIS ---
-        if hasattr(pl_module, 'use_residual') and pl_module.use_residual:
-            print("[Callback] Residual mode detected. Using stored analytical and residual components...")
-            
-            # Check if analytical and residual components are available from the model
-            if hasattr(pl_module, 'all_test_analytical_torque') and hasattr(pl_module, 'all_test_residual_component'):
-                analytical_tensor = pl_module.all_test_analytical_torque
-                residual_tensor = pl_module.all_test_residual_component
-                
-                # Check if individual spring and PD components are available
-                spring_tensor = getattr(pl_module, 'all_test_spring_component', None)
-                pd_tensor = getattr(pl_module, 'all_test_pd_component', None)
-                
-                # Convert to numpy and flatten
-                try:
-                    analytical_np = analytical_tensor.cpu().numpy().reshape(-1)
-                    residual_np = residual_tensor.cpu().numpy().reshape(-1)
-                    
-                    spring_np = None
-                    pd_np = None
-                    if spring_tensor is not None and pd_tensor is not None:
-                        spring_np = spring_tensor.cpu().numpy().reshape(-1)
-                        pd_np = pd_tensor.cpu().numpy().reshape(-1)
-                    
-                    # Ensure same length as other arrays (they should be, but just in case)
-                    min_len = min(len(analytical_np), len(residual_np), len(targets_np), len(timestamps_np), len(positions_np))
-                    analytical_np = analytical_np[:min_len]
-                    residual_np = residual_np[:min_len]
-                    targets_subset = targets_np[:min_len]
-                    timestamps_subset = timestamps_np[:min_len]
-                    positions_subset = positions_np[:min_len]
-                    
-                    if spring_np is not None and pd_np is not None:
-                        spring_np = spring_np[:min_len]
-                        pd_np = pd_np[:min_len]
-                except Exception as e:
-                    print(f"[Callback] Error processing stored analytical/residual components: {e}. Skipping residual mode analysis.")
-                    return
-            else:
-                print("[Callback] Analytical and residual components not found in model. Skipping residual mode analysis.")
-                return
-            
-            log_stats(analytical_np, 'analytical_torque')
-            log_stats(residual_np, 'residual_component')
-            if spring_np is not None:
-                log_stats(spring_np, 'spring_component')
-            if pd_np is not None:
-                log_stats(pd_np, 'pd_component')
-            
-            # Create DataFrame for residual mode analysis - both all and deduplicated versions
-            residual_df_all = pd.DataFrame({
-                'timestamp': timestamps_subset,
-                'actual_torque': targets_subset,
-                'analytical_torque': analytical_np,
-                'residual_component': residual_np,
-                'combined_prediction': analytical_np + residual_np,
-                'position': positions_subset
-            })
-            
-            # Add spring and PD components if available
-            if spring_np is not None and pd_np is not None:
-                residual_df_all['spring_component'] = spring_np
-                residual_df_all['pd_component'] = pd_np
-            
-            # Sort and create deduplicated version for time series plots
-            residual_df_all_sorted = residual_df_all.sort_values(by='timestamp').reset_index(drop=True)
-            residual_df_unique = residual_df_all_sorted.loc[residual_df_all_sorted.groupby('timestamp')['position'].idxmax()].reset_index(drop=True)
-            
-            print(f"[Callback] Residual mode - Total: {len(residual_df_all_sorted)}, Unique timesteps: {len(residual_df_unique)}")
-            
-            # --- 5. Analytical Torque vs. Actual Torque Scatter Plot - Use ALL data ---
-            # Sample data for scatter plot if dataset is very large
-            if scatter_sample_ratio < 1.0:
-                anal_scatter_df = residual_df_all_sorted.sample(frac=scatter_sample_ratio, random_state=42).reset_index(drop=True)
-            else:
-                anal_scatter_df = residual_df_all_sorted
-                
-            fig_anal_scatter, ax_anal_scatter = plt.subplots(figsize=scatter_figsize, dpi=dpi)
-            ax_anal_scatter.scatter(anal_scatter_df['actual_torque'], anal_scatter_df['analytical_torque'], 
-                                  alpha=0.5, s=1 if is_large_dataset else 20, label=f'Analytical (n={len(anal_scatter_df):,})', color='green')
-            lims_anal = [
-                np.min([ax_anal_scatter.get_xlim(), ax_anal_scatter.get_ylim()]),
-                np.max([ax_anal_scatter.get_xlim(), ax_anal_scatter.get_ylim()]),
-            ]
-            ax_anal_scatter.plot(lims_anal, lims_anal, 'r--', alpha=0.75, zorder=0, label='Ideal (y=x)')
-            ax_anal_scatter.set_xlabel("Actual Torque", fontsize=14)
-            ax_anal_scatter.set_ylabel("Analytical Torque", fontsize=14)
-            ax_anal_scatter.set_title("Test Set: Analytical Torque vs. Actual Torque", fontsize=16)
-            ax_anal_scatter.legend(fontsize=12, loc='upper left')
-            ax_anal_scatter.grid(True)
-            ax_anal_scatter.set_aspect('equal', adjustable='box')
-            
-            # --- 6. Component Analysis Time Series - Use deduplicated for clarity ---
-            fig_components, ax_components = plt.subplots(figsize=component_figsize, dpi=dpi)
-            comp_linewidth = linewidth * 1.2 if not is_large_dataset else linewidth
-            comp_thin_linewidth = linewidth * 0.8 if not is_large_dataset else linewidth * 0.7
-            
-            ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['actual_torque'], 
-                             label='Actual Torque', linewidth=comp_linewidth, color='blue')
-            ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['analytical_torque'], 
-                             label='Analytical Total', linewidth=linewidth, color='green', alpha=0.9)
-            
-            # Plot individual spring and PD components if available
-            if 'spring_component' in residual_df_unique.columns and 'pd_component' in residual_df_unique.columns:
-                ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['spring_component'], 
-                                 label='Spring Component', linewidth=comp_thin_linewidth, color='darkgreen', alpha=0.8, linestyle=':')
-                ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['pd_component'], 
-                                 label='PD Component', linewidth=comp_thin_linewidth, color='darkblue', alpha=0.8, linestyle=':')
-            
-            ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['residual_component'], 
-                             label='Residual Component', linewidth=linewidth, color='red', alpha=0.9)
-            ax_components.plot(residual_df_unique['timestamp'], residual_df_unique['combined_prediction'], 
-                             label='Combined Prediction', linewidth=linewidth, color='orange', alpha=0.9, linestyle='--')
-            ax_components.set_xlabel("Time (seconds since epoch)", fontsize=14)
-            ax_components.set_ylabel("Torque", fontsize=14)
-            ax_components.set_title("Test Set: Torque Component Analysis (Residual Mode)", fontsize=16)
-            ncol = 1 if is_large_dataset else 2  # Single column legend for large datasets
-            ax_components.legend(fontsize=12, ncol=ncol, loc='upper right')
-            ax_components.grid(True)
-            
-            # --- 7. Short Component Analysis (first 5 seconds) - Use deduplicated ---
-            short_mask_resid = (residual_df_unique['timestamp'] >= start_ts) & (residual_df_unique['timestamp'] <= end_ts)
-            short_resid_df = residual_df_unique[short_mask_resid]
-            
-            fig_components_short = None
-            if len(short_resid_df) > 0:
-                fig_components_short, ax_components_short = plt.subplots(figsize=component_figsize, dpi=dpi)
-                ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['actual_torque'], 
-                                        label='Actual Torque', linewidth=comp_linewidth, color='blue')
-                ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['analytical_torque'], 
-                                        label='Analytical Total', linewidth=linewidth, color='green', alpha=0.9)
-                
-                # Plot individual spring and PD components if available
-                if 'spring_component' in short_resid_df.columns and 'pd_component' in short_resid_df.columns:
-                    ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['spring_component'], 
-                                           label='Spring Component', linewidth=comp_thin_linewidth, color='darkgreen', alpha=0.8, linestyle=':')
-                    ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['pd_component'], 
-                                           label='PD Component', linewidth=comp_thin_linewidth, color='darkblue', alpha=0.8, linestyle=':')
-                
-                ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['residual_component'], 
-                                        label='Residual Component', linewidth=linewidth, color='red', alpha=0.9)
-                ax_components_short.plot(short_resid_df['timestamp'], short_resid_df['combined_prediction'], 
-                                        label='Combined Prediction', linewidth=linewidth, color='orange', alpha=0.9, linestyle='--')
-                ax_components_short.set_xlabel("Time (seconds since epoch)", fontsize=14)
-                ax_components_short.set_ylabel("Torque", fontsize=14)
-                ax_components_short.set_title(f"Test Set: First {short_window_duration:.0f}s - Torque Component Analysis", fontsize=16)
-                ax_components_short.legend(fontsize=12, ncol=ncol, loc='upper right')
-                ax_components_short.grid(True)
-            
-            # --- 8. Contribution Analysis - Use ALL data for better statistical coverage ---
-            analytical_error = residual_df_all_sorted['actual_torque'] - residual_df_all_sorted['analytical_torque']
-            residual_error = residual_df_all_sorted['actual_torque'] - residual_df_all_sorted['combined_prediction']
-            
-            contrib_figsize = (14, 10) if is_large_dataset else (16, 12)
-            fig_contrib, (ax_contrib1, ax_contrib2) = plt.subplots(2, 1, figsize=contrib_figsize, dpi=dpi)
-            
-            # Error comparison
-            ax_contrib1.hist(analytical_error, bins=bins, alpha=0.7, label='Analytical Error', color='green')
-            ax_contrib1.hist(residual_error, bins=bins, alpha=0.7, label='Combined Error', color='orange')
-            ax_contrib1.set_xlabel("Error (Actual - Predicted)", fontsize=14)
-            ax_contrib1.set_ylabel("Count", fontsize=14)
-            ax_contrib1.set_title("Error Distribution: Analytical vs Combined", fontsize=16)
-            ax_contrib1.legend(fontsize=12, loc='upper right')
-            ax_contrib1.grid(True)
-            
-            # RMS contribution analysis - using all data for better statistics
-            analytical_rms = np.sqrt(np.mean(analytical_error**2))
-            combined_rms = np.sqrt(np.mean(residual_error**2))
-            residual_magnitude_rms = np.sqrt(np.mean(residual_df_all_sorted['residual_component']**2))
-            
-            contributions = ['Analytical RMS Error', 'Combined RMS Error', 'Residual RMS Magnitude']
-            values = [analytical_rms, combined_rms, residual_magnitude_rms]
-            colors = ['green', 'orange', 'red']
-            
-            ax_contrib2.bar(contributions, values, color=colors, alpha=0.7)
-            ax_contrib2.set_ylabel("RMS Value", fontsize=14)
-            ax_contrib2.set_title("RMS Analysis: Analytical vs Residual Contributions", fontsize=16)
-            ax_contrib2.grid(True, axis='y')
-            ax_contrib2.tick_params(axis='both', which='major', labelsize=12)
-            
-            # Add value labels on bars
-            for i, v in enumerate(values):
-                ax_contrib2.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom', fontsize=12)
-            
-            plt.tight_layout()
-            
-            # --- 9. Individual Component Scatter Plots if available ---
-            spring_pd_scatter_figs = []
-            if 'spring_component' in residual_df_all_sorted.columns and 'pd_component' in residual_df_all_sorted.columns:
-                # Use same sampled data for component scatter plots
-                comp_scatter_df = anal_scatter_df if scatter_sample_ratio < 1.0 else residual_df_all_sorted
-                
-                # Spring component scatter plot
-                fig_spring_scatter, ax_spring_scatter = plt.subplots(figsize=scatter_figsize, dpi=dpi)
-                ax_spring_scatter.scatter(comp_scatter_df['actual_torque'], comp_scatter_df['spring_component'], 
-                                        alpha=0.5, s=1 if is_large_dataset else 20, label=f'Spring (n={len(comp_scatter_df):,})', color='darkgreen')
-                lims_spring = [
-                    np.min([ax_spring_scatter.get_xlim(), ax_spring_scatter.get_ylim()]),
-                    np.max([ax_spring_scatter.get_xlim(), ax_spring_scatter.get_ylim()]),
-                ]
-                ax_spring_scatter.plot(lims_spring, lims_spring, 'r--', alpha=0.75, zorder=0, label='Ideal (y=x)')
-                ax_spring_scatter.set_xlabel("Actual Torque", fontsize=14)
-                ax_spring_scatter.set_ylabel("Spring Component", fontsize=14)
-                ax_spring_scatter.set_title("Test Set: Spring Component vs. Actual Torque", fontsize=16)
-                ax_spring_scatter.legend(fontsize=12, loc='upper left')
-                ax_spring_scatter.grid(True)
-                ax_spring_scatter.set_aspect('equal', adjustable='box')
-                spring_pd_scatter_figs.append(("Spring Component vs Actual Scatter", fig_spring_scatter))
-                
-                # PD component scatter plot
-                fig_pd_scatter, ax_pd_scatter = plt.subplots(figsize=scatter_figsize, dpi=dpi)
-                ax_pd_scatter.scatter(comp_scatter_df['actual_torque'], comp_scatter_df['pd_component'], 
-                                    alpha=0.5, s=1 if is_large_dataset else 20, label=f'PD (n={len(comp_scatter_df):,})', color='darkblue')
-                lims_pd = [
-                    np.min([ax_pd_scatter.get_xlim(), ax_pd_scatter.get_ylim()]),
-                    np.max([ax_pd_scatter.get_xlim(), ax_pd_scatter.get_ylim()]),
-                ]
-                ax_pd_scatter.plot(lims_pd, lims_pd, 'r--', alpha=0.75, zorder=0, label='Ideal (y=x)')
-                ax_pd_scatter.set_xlabel("Actual Torque", fontsize=14)
-                ax_pd_scatter.set_ylabel("PD Component", fontsize=14)
-                ax_pd_scatter.set_title("Test Set: PD Component vs. Actual Torque", fontsize=16)
-                ax_pd_scatter.legend(fontsize=12, loc='upper left')
-                ax_pd_scatter.grid(True)
-                ax_pd_scatter.set_aspect('equal', adjustable='box')
-                spring_pd_scatter_figs.append(("PD Component vs Actual Scatter", fig_pd_scatter))
+        # ---------------------------------
+        # Save all figures locally
+        # ---------------------------------
+        plot_dir = self._get_plot_dir(trainer)
+        for key, fig in local_figs:
+            safe = self._sanitize(key) + ".png"
+            try:
+                fig.savefig(os.path.join(plot_dir, safe), dpi=fig.dpi, bbox_inches="tight")
+            except Exception as e:
+                print(f"[Callback] Could not save figure '{key}' locally: {e}")
 
-            # Add residual mode plots to log dictionary
-            log_dict.update({
-                "Analytical vs Actual Scatter": wandb.Image(fig_anal_scatter),
-                "Component Analysis Time Series": wandb.Image(fig_components),
-                "Contribution Analysis": wandb.Image(fig_contrib)
-            })
-            
-            # Add individual component scatter plots if available
-            for plot_name, fig in spring_pd_scatter_figs:
-                log_dict[plot_name] = wandb.Image(fig)
-            
-            if fig_components_short:
-                log_dict[f"Component Analysis First {short_window_duration:.0f}s"] = wandb.Image(fig_components_short)
-            
-            # Close residual mode figures
-            plt.close(fig_anal_scatter)
-            plt.close(fig_components)
-            plt.close(fig_contrib)
-            if fig_components_short:
-                plt.close(fig_components_short)
-            
-            # Close individual component scatter plots
-            for _, fig in spring_pd_scatter_figs:
-                plt.close(fig)
-                
-            print(f"[Callback] Residual mode analysis complete. Added {len([k for k in log_dict.keys() if 'Analytical' in k or 'Component' in k or 'Contribution' in k or 'Spring' in k or 'PD' in k])} additional plots.")
-
-        # Log plots to WandB
+        # ---------------------------------
+        # Log plots to WandB if available
+        # ---------------------------------
         if trainer.logger and hasattr(trainer.logger.experiment, 'log'):
             print("[Callback] Logging plots to WandB...")
             try:
@@ -610,17 +428,11 @@ class TestPredictionPlotter(Callback):
         else:
             print("[Callback] WandB logger not available. Cannot log plots.")
 
-        plt.close(fig_scatter)
-        plt.close(fig_ts)
-        plt.close(fig_resid)
-        plt.close(fig_hist)
-        
-        # Close slice plots
-        for slice_fig in slice_figs:
-            plt.close(slice_fig)
-        # Close short window plots
-        for short_fig in short_figs:
-            plt.close(short_fig)
+        # ---------------------------------
+        # Close all figure objects to free memory
+        # ---------------------------------
+        for _, fig in local_figs:
+            plt.close(fig)
 
         # Clean up stored tensors in module
         if hasattr(pl_module, 'all_test_preds'):
@@ -640,6 +452,14 @@ class TestPredictionPlotter(Callback):
              delattr(pl_module, 'all_test_spring_component')
         if hasattr(pl_module, 'all_test_pd_component'):
              delattr(pl_module, 'all_test_pd_component')
+
+        # Save predictions vs targets data for the test set (deduplicated)
+        csv_path = os.path.join(plot_dir, "predictions_vs_targets_test.csv")
+        try:
+            plot_df_unique.to_csv(csv_path, index=False)
+            print(f"[Callback] Saved predictions/targets data to {csv_path}")
+        except Exception as e:
+            print(f"[Callback] Could not save predictions CSV: {e}")
 
 
 class DatasetVisualizationCallback(Callback):

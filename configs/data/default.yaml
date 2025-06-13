@@ -50,16 +50,16 @@ num_workers: 4          # Number of worker processes for data loading
 radius_accel: 0.03 # meters. Distance from rotation axis to tangential accelerometer.
 
 # --- Filter Parameters (passed to ActuatorDataset) ---
-filter_cutoff_freq_hz: 30.0 # Cutoff frequency in Hz for low-pass Butterworth filters
+filter_cutoff_freq_hz: 20.0 # Cutoff frequency in Hz for low-pass Butterworth filters
 filter_order: 6             # Order of the Butterworth filter
 
 # Sequence duration (seconds) for ActuatorDataset
 # sequence_length will be computed as round(sequence_duration_s * sampling_frequency)
-sequence_duration_s: 1.0 # Duration in seconds for each sequence; must be set in confi
+sequence_duration_s: 0.5 # Duration in seconds for each sequence; must be set in confi
 
 resampling_frequency_hz: 240.0 # Hz
 # Maximum allowed torque [Nm] for servo + spring combined
-max_torque_nm: 3.6 # Nm
+max_torque_nm: 2.3 # Nm
 
 # --- Sensor Bias Correction ---
 # Biases estimated from static hold data (static_segment_plateau2.csv)
@@ -67,4 +67,4 @@ sensor_biases:
   acc_y_bias: 0.039204  # Accelerometer Y bias
   gyro_z_bias: -0.002273  # Gyroscope Z bias
 # Maximum commanded angular velocity threshold (rad/s) for filtering sequences; set to null to disable
-max_commanded_vel: 10.0
+max_commanded_vel: 36.0

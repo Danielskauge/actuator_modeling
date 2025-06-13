@@ -414,6 +414,8 @@ class ActuatorDataModule(pl.LightningDataModule):
         """Sets up data for a specific LOMO CV fold. No intra-fold splitting of seen data."""
         # _load_all_datasets_once() # Called in prepare_data
         self._current_mode = "lomo_fold"
+        # Store the current fold index so that callbacks (e.g. plotting) can access it later
+        self.current_fold_index = fold_index
 
         num_total_groups = len(self.ordered_group_ids)
         if not 0 <= fold_index < num_total_groups:
@@ -425,6 +427,8 @@ class ActuatorDataModule(pl.LightningDataModule):
 
         # The group at fold_index is for validation and testing (unseen for this fold)
         held_out_group_id = self.ordered_group_ids[fold_index]
+        # Expose held-out group ID for downstream consumers (e.g. callbacks that want to label plots)
+        self.held_out_group_id = held_out_group_id
         held_out_datasets = self.datasets_by_group[held_out_group_id]
         
         # Combine all datasets from the held-out group for validation and testing

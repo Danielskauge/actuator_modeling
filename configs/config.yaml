@@ -20,7 +20,7 @@ wandb:
   active: true # set to false to disable wandb
   project: "actuator_modeling_gru_v2" # Your WandB project name
   entity: "" # Your WandB entity (username or team), optional
-  name_suffix: "pure_gru_loss_diff_max_vel" # Optional suffix for run names
+  name_suffix: "cut_freq_15" # Optional suffix for run names
   group_suffix: "initial_tests" # Optional suffix for wandb groups
   watch_log_freq: 100
   # tags: ["${model.model_type}", "lomo_cv"]
